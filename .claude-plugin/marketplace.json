@@ -1,0 +1,45 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "guitaralchemist",
+  "description": "Claude Code plugins and mods for the GuitarAlchemist ecosystem (ix, ga, tars, Demerzel, gaia, learn): the ones that work across repos live here, the ones that belong to a repo are listed from it",
+  "owner": {
+    "name": "GuitarAlchemist",
+    "url": "https://github.com/GuitarAlchemist"
+  },
+  "plugins": [
+    {
+      "name": "fleet",
+      "version": "0.1.0",
+      "description": "Coordination across the agent fleet: the AI scrum, a round table of what every session, subagent and pull request is doing, with the collisions, stale lanes and decisions waiting on the user",
+      "source": "./plugins/fleet",
+      "category": "productivity"
+    },
+    {
+      "name": "session-inbox",
+      "version": "0.3.0",
+      "description": "Holds messages from other sessions in an /inbox pane instead of interrupting the turn, and adds working groups in ~/.agents/groups.json that you and the model can post to",
+      "source": "./plugins/session-inbox",
+      "category": "productivity"
+    },
+    {
+      "name": "shared-repo-guard",
+      "version": "0.2.1",
+      "description": "Holds blanket git commands in the shared clones for the user's confirmation, with what they would touch; adds /lanes and a /prs pane of open pull requests and their CI",
+      "source": "./plugins/shared-repo-guard",
+      "category": "productivity"
+    },
+    {
+      "name": "ga",
+      "version": "1.0.0",
+      "description": "Guitar Alchemist DSL: music theory tools, chord analysis, tab search and GA Language commands. It runs GaMcpServer from the current directory, so it works only in a session started inside a ga checkout",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/GuitarAlchemist/ga.git",
+        "path": "plugins/ga",
+        "ref": "main",
+        "sha": "879f148e3f2b7d55d9f465d74803e8c10647fb3e"
+      },
+      "category": "development"
+    }
+  ]
+}
