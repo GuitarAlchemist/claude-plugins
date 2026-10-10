@@ -25,3 +25,9 @@ filesystem aliases or symlinks and is not an atomic guarantee against source cha
 The guard watches `.gd` files directly in `scripts` and `artpass/dlss`. Removed scripts produce
 warnings without trying to execute them. `/godot` displays checks and process observations;
 these observations do not replace the user's permission for disturbing an active demo.
+
+Copy detection considers command positions rather than argument text or comments. The limited
+shell analysis is not a general interpreter: supported wrappers are inspected to a bounded depth,
+and detected unsupported copy forms remain held. Process observations query legacy Godot names
+plus the configured executable names (including titles), so a renamed checker is still discoverable.
+Stopping a configured checker by PID or executable name uses the same confirmation guard.

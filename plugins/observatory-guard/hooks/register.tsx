@@ -15,7 +15,7 @@ import {
   opensGodotWindow,
   parseErrors,
   parseProcs,
-  PROCS_SCRIPT,
+  procsScript,
   rootOf,
   normalizePath,
   scriptPaths,
@@ -169,11 +169,12 @@ async function commandText($: EngineInterface, command: string): Promise<string>
 }
 
 async function listProcs($: EngineInterface): Promise<ObservatoryGuardProc[]> {
-  const r = await $.process.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', PROCS_SCRIPT], {
+  const config = await liveConfig($)
+  const r = await $.process.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', procsScript(config.godot)], {
     timeoutMs: 20_000,
   })
   if (r.exitCode !== 0) throw new Error((r.stderr.trim().split('\n')[0] ?? 'process listing failed').slice(0, 120))
-  const roots = await liveRoots($)
+  const roots = config.roots
   return parseProcs(r.stdout).map(p => ({
     pid: p.pid,
     kind: classify(p, roots),
@@ -247,8 +248,7 @@ async function beforeShell($: EngineInterface, command: string): Promise<string 
   const [, copy] = config.roots
   let cwd = ''
   try { cwd = normalizePath(await $.session.cwd()) ?? '' } catch { /* unresolved relative paths fail closed */ }
-  const inCopy = !!copy && (cwd.toLowerCase() === copy.toLowerCase() || cwd.toLowerCase().startsWith(`${copy.toLowerCase()}/`))
-  if (copiesIntoDlss(text) || (inCopy && /\b(?:Copy-Item|cpi|cp|copy|robocopy|xcopy|shutil\.copy\w*|copyfile)\b/i.test(text))) {
+  if (copiesIntoDlss(text)) {
     try {
       const jobs = dlssCopySources(text, cwd, copy ?? '')
       if (jobs.error) return `observatory-guard: refused (copy-unverified). ${jobs.error}. Use explicit literal single-script copies; no copy has run.`
@@ -280,7 +280,7 @@ async function beforeShell($: EngineInterface, command: string): Promise<string 
   }
 
   const window = opensGodotWindow(text, config.godot)
-  const stop = stopTargets(text)
+  const stop = stopTargets(text, config.godot)
   if (!window && !stop) return undefined
 
   if (stop && (stop.allPython || stop.pids.length)) {

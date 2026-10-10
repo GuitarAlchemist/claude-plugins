@@ -256,3 +256,77 @@ test('overlapping configured projects are refused rather than choosing a checker
   expect(f.checked.length).toBe(0)
   expect(f.ran()).toBe(false)
 })
+
+test('copy words in arguments and comments do not block ordinary shell commands', async ($, on) => {
+  const f = copyFixture(on, false, false, false, 'C:/tmp/observatory-dlss')
+  for (const command of [
+    'git log --grep=copy', 'echo copy', 'pwsh -Command \"git log --grep=copy\"', 'echo "Copy-Item a.gd; cp b.gd c.gd"',
+    'git status # Copy-Item a.gd C:/tmp/observatory-dlss/scripts/a.gd',
+    '# Copy-Item a.gd C:/tmp/observatory-dlss/scripts/a.gd\ngit status',
+  ]) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(out.deny).toBeUndefined()
+    expect(out.result).toBe('ran')
+  }
+  expect(f.checked.length).toBe(0)
+})
+
+function configuredDemoFixture(on: Parameters<Parameters<typeof test>[1]>[1]) {
+  let ran = false
+  let asks = 0
+  const queries: string[] = []
+  on('session.cwd', () => ({ value: 'C:/work' }))
+  on('env.get', ($, e) => ({ value: e.name === 'OBSERVATORY_GUARD_ROOTS' ? 'C:/prototype;D:/demo-copy' : 'C:/tools/stock.exe;D:/tools/fork.exe' }))
+  on('fs.list', () => ({ value: [] }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('process.run', ($, e) => {
+    const query = e.argv.join(' ')
+    queries.push(query)
+    const findsConfiguredDemo = query.includes('fork.exe') && query.includes('Get-CimInstance')
+    return { value: { exitCode: 0, stdout: findsConfiguredDemo ? JSON.stringify({ pid: 777, ppid: 1, cmd: 'D:/tools/fork.exe --path D:/demo-copy', title: 'Demo', started: '10:00' }) : '', stderr: '' } }
+  })
+  on('tool.call', ($, e) => {
+    if (e.tool === 'AskUserQuestion') { asks++; return { result: { answers: { [e.questions[0].question]: 'Annuler' } } } }
+    ran = true
+    return { result: 'ran' }
+  })
+  return { ran: () => ran, asks: () => asks, queries }
+}
+
+test('configured executable outside godot prefix is discovered before another window opens', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  const out = await $.tool.call({ tool: 'PowerShell', command: "& 'C:/tools/stock.exe' --editor" })
+  expect(String(out.deny)).toMatch(/window-over-demo/)
+  expect(f.asks()).toBe(1)
+  expect(f.ran()).toBe(false)
+})
+
+test('configured executable outside godot prefix is discovered before stopping its PID', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  const out = await $.tool.call({ tool: 'PowerShell', command: 'Stop-Process -Id 777' })
+  expect(String(out.deny)).toMatch(/stop-demo/)
+  expect(f.asks()).toBe(1)
+  expect(f.ran()).toBe(false)
+})
+
+
+test('real copy invocations following other commands or comments are still checked', async ($, on) => {
+  const f = copyFixture(on, true)
+  for (const command of [
+    'if ($true) { Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd }',
+    'echo copy; Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd # copied script',
+    "git status && cp 'C:/other/scripts/scene.gd' 'C:/tmp/observatory-dlss/scripts/scene.gd'",
+  ]) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/copy-broken/)
+  }
+  expect(f.ran()).toBe(false)
+})
+
+test('configured demo is protected when stopped by its executable name', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  const out = await $.tool.call({ tool: 'PowerShell', command: 'Stop-Process -Name fork' })
+  expect(String(out.deny)).toMatch(/stop-demo/)
+  expect(f.asks()).toBe(1)
+  expect(f.ran()).toBe(false)
+})

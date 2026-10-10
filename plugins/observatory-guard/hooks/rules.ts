@@ -138,7 +138,7 @@ export function forkWithFixedFps(text: string, fork?: string): boolean {
 // name.
 export type StopTargets = { pids: number[]; allGodot: boolean; allPython: boolean }
 
-export function stopTargets(text: string): StopTargets | undefined {
+export function stopTargets(text: string, binaries: readonly string[] = []): StopTargets | undefined {
   if (!/\b(?:Stop-Process|spps|taskkill|kill)\b|\.Kill\(/i.test(text)) return undefined
   const pids = new Set<number>()
   const add = (list: string) => {
@@ -149,7 +149,13 @@ export function stopTargets(text: string): StopTargets | undefined {
   for (const m of text.matchAll(/taskkill\b[^\n;|]*?\/PID\s+(\d+)/gi)) add(m[1] ?? '')
   for (const m of text.matchAll(/\bkill\s+(?:-\w+\s+)*(\d+)/g)) add(m[1] ?? '')
   for (const m of text.matchAll(/Get-Process\s+-Id\s+(\d+)[^\n;]*\|\s*Stop-Process/gi)) add(m[1] ?? '')
-  const allGodot =
+  const named = [...text.matchAll(/(?:(?:Stop-Process|spps|Get-Process)\b[^\n;|]*-Name|taskkill\b[^\n;|]*\/IM)\s+(?:"([^"]+)"|'([^']+)'|([^\s;|]+))/gi)]
+    .map(m => (m[1] ?? m[2] ?? m[3] ?? '').toLowerCase().replace(/\.exe$/i, ''))
+  const configuredName = binaries.some(binary => {
+    const name = (slash(binary).split('/').pop() ?? '').toLowerCase().replace(/\.exe$/i, '')
+    return named.some(target => target.endsWith('*') ? name.startsWith(target.slice(0, -1)) : name === target)
+  })
+  const allGodot = configuredName ||
     /(?:Stop-Process|spps)\b[^\n;|]*-Name\s+['"]?godot/i.test(text) ||
     /taskkill\b[^\n;|]*\/IM\s+['"]?godot/i.test(text) ||
     /Get-Process[^\n|]*godot[^\n]*\|\s*Stop-Process/i.test(text) ||
@@ -183,9 +189,59 @@ export const COMFY_SCRIPT = [
   '} | ConvertTo-Json -Compress',
 ].join('\n')
 
-// A copy candidate; its actual normalized destination is checked by dlssCopySources below.
+// Split command positions without treating quoted arguments or comments as commands.
+// This is a bounded text guard, not a general shell interpreter.
+function shellStatements(text: string): string[] {
+  const out: string[] = []
+  let part = '', quote = ''
+  const finish = () => { if (part.trim()) out.push(part.trim()); part = '' }
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i] ?? ''
+    if (quote) {
+      part += c
+      if ((c === '`' || c === '\\') && text[i + 1] === quote) part += text[++i]
+      else if (c === quote) quote = ''
+      continue
+    }
+    if (c === '"' || c === "'") { quote = c; part += c; continue }
+    if (c === '#' && (i === 0 || /\s/.test(text[i - 1] ?? ''))) {
+      while (i < text.length && text[i] !== '\n') i++
+      finish(); continue
+    }
+    if (c === '<' && text[i + 1] === '#') {
+      const end = text.indexOf('#>', i + 2)
+      i = end < 0 ? text.length : end + 1
+      continue
+    }
+    if (c === ';' || c === '\n' || c === '|' || c === '{' || c === '}' || (c === '&' && (text[i + 1] === '&' || part.trim()))) {
+      finish(); if (text[i + 1] === c) i++; continue
+    }
+    part += c
+  }
+  finish()
+  return out
+}
+
+function copyStatements(text: string, depth = 0): string[] {
+  return shellStatements(text).filter(statement => {
+    const first = statement.match(/^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|([^\s]+))/)
+    const cmd = slash(first?.[1] ?? first?.[2] ?? first?.[3] ?? '').split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
+    if (['copy-item', 'cpi', 'cp', 'copy', 'robocopy', 'xcopy'].includes(cmd)) return true
+    if (/^\s*(?:shutil\.copy\w*|copyfile)\s*\(/.test(statement)) return true
+    // These wrappers execute their code argument. Unsupported copy code is held, not run.
+    const code = statement.match(/(?:^|\s)(?:-c|-command|\/c)\s+(?:"([^"]*)"|'([^']*)'|(.+))$/i)
+    if (!code) return false
+    const body = code[1] ?? code[2] ?? code[3] ?? ''
+    if (/^python[\d.]*$|^pythonw$/.test(cmd)) return /\b(?:shutil\.copy\w*|copyfile)\s*\(/.test(body)
+    if (!/^(?:pwsh|powershell|bash|sh|cmd)$/.test(cmd)) return false
+    return depth < 2 ? copyStatements(body, depth + 1).length > 0 :
+      /\b(?:Copy-Item|cpi|cp|copy|robocopy|xcopy)\b/i.test(body)
+
+  })
+}
+
 export function copiesIntoDlss(text: string): boolean {
-  return /\b(?:Copy-Item|cpi|cp|copy|robocopy|xcopy|shutil\.copy\w*|copyfile)\b/i.test(text)
+  return copyStatements(text).length > 0
 }
 
 // ---- Godot processes ----
@@ -228,12 +284,22 @@ export function parseProcs(json: string): GodotProc[] {
   })
 }
 
-export const PROCS_SCRIPT = [
-  "$t = @{}; Get-Process -Name 'godot*' -ErrorAction SilentlyContinue | ForEach-Object { $t[$_.Id] = $_.MainWindowTitle }",
-  "Get-CimInstance Win32_Process -Filter \"Name like 'godot%'\" | ForEach-Object {",
-  "  [pscustomobject]@{ pid = $_.ProcessId; ppid = $_.ParentProcessId; cmd = $_.CommandLine; title = $t[[int]$_.ProcessId]; started = $_.CreationDate.ToString('HH:mm') }",
-  '} | ConvertTo-Json -Compress',
-].join('\n')
+// Query only legacy Godot names and configured executable names, including window titles.
+// Quote values as PowerShell literals; configuration is never interpolated as executable code.
+export function procsScript(binaries: readonly string[] = []): string {
+  const names = [...new Set(binaries.map(path => slash(path).split('/').pop() ?? '').filter(Boolean))]
+  const literal = (value: string) => `'${value.replace(/'/g, "''")}'`
+  const filter = ["Name like 'godot%'", ...names.map(name => `Name = '${name.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`)].join(' OR ')
+  const processNames = ['godot*', ...names.map(name => name.replace(/\.exe$/i, ''))].map(literal).join(', ')
+  return [
+    `$t = @{}; Get-Process -Name @(${processNames}) -ErrorAction SilentlyContinue | ForEach-Object { $t[$_.Id] = $_.MainWindowTitle }`,
+    `Get-CimInstance Win32_Process -Filter ${literal(filter)} | ForEach-Object {`,
+    "  [pscustomobject]@{ pid = $_.ProcessId; ppid = $_.ParentProcessId; cmd = $_.CommandLine; title = $t[[int]$_.ProcessId]; started = $_.CreationDate.ToString('HH:mm') }",
+    '} | ConvertTo-Json -Compress',
+  ].join('\n')
+}
+
+export const PROCS_SCRIPT = procsScript()
 
 // The command line cut to what tells runs apart: the exe's name and the arguments.
 export function shortCmd(cmd: string): string {
@@ -251,7 +317,7 @@ export function dlssCopySources(text: string, cwd: string, copy: string): { sour
     if (/[\$`*?{}()[\],]/.test(p)) return undefined
     return normalizePath(/^[A-Za-z]:\//.test(p) || p.startsWith('/') ? p : cwd ? `${cwd}/${p}` : '')
   }
-  const statements = text.split(/\r?\n|;/).filter(s => copiesIntoDlss(s) || /^\s*(?:Copy-Item|cpi|cp|copy)\b/i.test(s))
+  const statements = copyStatements(text)
   if (!statements.length) return { sources, error: 'no literal copy statement could be resolved' }
   for (const statement of statements) {
     const tokens: string[] = []
@@ -267,7 +333,8 @@ export function dlssCopySources(text: string, cwd: string, copy: string): { sour
       tokens.push(m[1] ?? m[2] ?? m[3] ?? '')
       at = pattern.lastIndex
     }
-    const cmd = (tokens.shift() ?? '').toLowerCase()
+    if (tokens[0] === '&') tokens.shift()
+    const cmd = slash(tokens.shift() ?? '').split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
     if (!['copy-item', 'cpi', 'cp', 'copy'].includes(cmd)) return { sources, error: 'unsupported copy program or wrapper' }
     let source: string | undefined
     let destination: string | undefined
