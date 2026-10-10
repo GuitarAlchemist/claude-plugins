@@ -4,6 +4,7 @@ import {
   classify,
   comfyFrom,
   copiesIntoDlss,
+  dlssCopySources,
   forkWithFixedFps,
   opensGodotWindow,
   parseErrors,
