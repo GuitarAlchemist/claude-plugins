@@ -133,9 +133,133 @@ class PolicyTests(unittest.TestCase):
             try:
                 os.chdir(root)
                 def tamper(*args,**kwargs): (root/'.pilot/report.json').write_text('{"changed":true}')
-                with patch.object(p,'apply_proposal'),patch.object(p.subprocess,'run',side_effect=tamper):
+                with patch.object(p,'apply_proposal'),patch.object(p.subprocess,'run',side_effect=tamper),patch.object(p,'source_digest',return_value='d'*64,create=True):
                     with self.assertRaisesRegex(ValueError,'modified'): p.test_proposal()
                 self.assertFalse((root/'.pilot/tested.json').exists())
             finally: os.chdir(previous)
+
+
+class RegressionTests(unittest.TestCase):
+    def prepare_review(self, comparison=None):
+        head, base = 'a'*40, 'c'*40
+        pr={'state':'open','changed_files':1,'head':{'sha':head,'repo':{'full_name':p.REPO}},'base':{'sha':base,'ref':'main','repo':{'full_name':p.REPO}}}
+        good={'filename':'plugins/fleet/right.md','patch':'@@ -0,0 +1 @@\n+HEAD A ONLY','additions':1,'deletions':0}
+        comparison=comparison or {'base_commit':{'sha':base},'merge_base_commit':{'sha':base},'commits':[{'sha':head}],'status':'ahead','files':[good]}
+        requests=[]
+        def api(key):
+            requests.append(key)
+            if key=='': return {'default_branch':'main'}
+            if key=='git/ref/heads/main': return {'object':{'sha':base}}
+            if key=='pulls/1': return pr
+            if key=='pulls/1/files?per_page=100': return [dict(good,patch='@@ -0,0 +1 @@\n+HEAD B ONLY')]
+            if key==f'compare/{base}...{head}': return comparison
+            raise AssertionError(key)
+        with tempfile.TemporaryDirectory() as d:
+            previous=os.getcwd()
+            try:
+                os.chdir(d)
+                env={'GITHUB_REPOSITORY':p.REPO,'GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_REF':'refs/heads/main','GITHUB_ACTOR':'writer','TARGET_NUMBER':'1','EXPECTED_SHA':head,'GITHUB_RUN_ID':'7','GITHUB_OUTPUT':str(pathlib.Path(d)/'output.txt')}
+                with patch.dict(os.environ,env),patch.object(p,'check_writer'),patch.object(p,'repo_api',side_effect=api): p.prepare('review')
+                return pathlib.Path('output.txt').read_text(),p.load('.pilot/meta.json'),requests
+            finally: os.chdir(previous)
+
+    def test_review_a_b_a_race_cannot_use_mutable_pr_diff(self):
+        prompt,meta,requests=self.prepare_review()
+        self.assertIn('HEAD A ONLY',prompt)
+        self.assertNotIn('HEAD B ONLY',prompt)
+        self.assertNotIn('pulls/1/files?per_page=100',requests)
+        self.assertEqual(meta['diff_base_sha'],'c'*40)
+
+    def test_compare_mismatch_or_missing_patch_refused(self):
+        for field,value in [('base_commit',{'sha':'b'*40}),('commits',[{'sha':'b'*40}]),('files',[{'filename':'x','additions':1,'deletions':0}])]:
+            comparison={'base_commit':{'sha':'c'*40},'merge_base_commit':{'sha':'c'*40},'commits':[{'sha':'a'*40}],'status':'ahead','files':[{'filename':'x','patch':'+A','additions':1,'deletions':0}]}
+            comparison[field]=value
+            with self.subTest(field=field),self.assertRaises(ValueError): self.prepare_review(comparison)
+
+    def fixture(self, root):
+        import subprocess
+        (root/'.pilot').mkdir();(root/'plugins/fleet/.claude-plugin').mkdir(parents=True);(root/'.claude-plugin').mkdir()
+        (root/'plugins/fleet/.claude-plugin/plugin.json').write_text(json.dumps({'name':'fleet','version':'1.0.0'}))
+        (root/'.claude-plugin/marketplace.json').write_text(json.dumps({'plugins':[{'name':'fleet','source':'./plugins/fleet','version':'1.0.0'}]}))
+        (root/'outside.ts').write_text('trusted baseline')
+        subprocess.run(['git','init','-q'],cwd=root,check=True,capture_output=True)
+        subprocess.run(['git','add','.'],cwd=root,check=True,capture_output=True)
+        subprocess.run(['git','-c','user.name=Offline Test','-c','user.email=offline@example.invalid','commit','-qm','fixture'],cwd=root,check=True,capture_output=True)
+        base=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
+        p.dump(root/'.pilot/meta.json',{'scope':'fleet','sha':base,'number':1,'default':'main','run_id':'7'})
+        p.dump(root/'.pilot/report.json',{'summary':'fix','changes':[{'path':'plugins/fleet/.claude-plugin/plugin.json','content':json.dumps({'name':'fleet','version':'1.0.1'})},{'path':'plugins/fleet/main.ts','content':'export const tested = true;\n'}]})
+        return base
+
+    def test_tests_cannot_attest_a_mutated_or_extra_source_tree(self):
+        for target in ['plugins/fleet/main.ts','outside.ts','plugins/fleet/extra.ts']:
+            with self.subTest(target=target),tempfile.TemporaryDirectory() as d:
+                root=pathlib.Path(d);self.fixture(root);previous=os.getcwd()
+                try:
+                    os.chdir(root)
+                    real_run=p.subprocess.run
+                    def tamper(args,**kwargs):
+                        if args[0]=='claude': pathlib.Path(target).write_text('different tested source')
+                        else: return real_run(args,**kwargs)
+                    with patch.object(p.subprocess,'run',side_effect=tamper):
+                        with self.assertRaisesRegex(ValueError,'source'): p.test_proposal()
+                    self.assertFalse(pathlib.Path('.pilot/tested.json').exists())
+                finally: os.chdir(previous)
+
+    def test_publish_rechecks_actual_tree_before_any_api_write(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);self.fixture(root);previous=os.getcwd()
+            try:
+                os.chdir(root)
+                real_run=p.subprocess.run
+                with patch.object(p.subprocess,'run',side_effect=lambda args,**kwargs: None if args[0]=='claude' else real_run(args,**kwargs)): p.test_proposal()
+                self.assertRegex(p.load('.pilot/tested.json')['source_sha256'],r'^[0-9a-f]{64}$')
+                pathlib.Path('plugins/fleet/.claude-plugin/plugin.json').write_text(json.dumps({'name':'fleet','version':'1.0.0'}))
+                pathlib.Path('outside.ts').write_text('publish tree differs')
+                with patch.object(p,'verify_meta'),patch.object(p,'repo_api') as writes:
+                    with self.assertRaisesRegex(ValueError,'source'): p.publish()
+                    writes.assert_not_called()
+            finally: os.chdir(previous)
+
+    def test_legacy_receipt_cannot_claim_tested_source(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);base=self.fixture(root);previous=os.getcwd()
+            try:
+                os.chdir(root)
+                p.dump('.pilot/tested.json',{'base':base,'report_sha256':p.hashlib.sha256(pathlib.Path('.pilot/report.json').read_bytes()).hexdigest(),'tests':'old unbound receipt'})
+                with patch.object(p,'verify_meta'),patch.object(p,'repo_api') as writes:
+                    with self.assertRaisesRegex(ValueError,'source'): p.publish()
+                    writes.assert_not_called()
+            finally: os.chdir(previous)
+
+
+    def test_same_tested_source_can_publish_and_records_digest(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);self.fixture(root);previous=os.getcwd()
+            try:
+                os.chdir(root)
+                real_run=p.subprocess.run
+                with patch.object(p.subprocess,'run',side_effect=lambda args,**kwargs: None if args[0]=='claude' else real_run(args,**kwargs)): p.test_proposal()
+                attestation=p.load('.pilot/tested.json')['source_sha256']
+                pathlib.Path('plugins/fleet/.claude-plugin/plugin.json').write_text(json.dumps({'name':'fleet','version':'1.0.0'}))
+                calls=[]
+                def api(path,data=None):
+                    calls.append((path,data))
+                    if path.startswith('git/commits/'): return {'tree':{'sha':'b'*40}}
+                    if path=='pulls': return {'html_url':'https://example.invalid/draft'}
+                    return {'sha':'c'*40}
+                with patch.object(p,'verify_meta'),patch.object(p,'repo_api',side_effect=api): p.publish()
+                draft=next(data for path,data in calls if path=='pulls')
+                self.assertTrue(draft['draft']);self.assertIn(attestation,draft['body'])
+                content=[data['content'] for path,data in calls if path=='git/blobs']
+                self.assertIn('export const tested = true;\n',content)
+            finally: os.chdir(previous)
+
+    def test_review_base_changed_even_with_same_head_refused(self):
+        meta={'mode':'review','number':1,'sha':'a'*40,'default':'main','actor':'writer','run_id':'7','diff_base_sha':'c'*40}
+        pr={'state':'open','head':{'sha':'a'*40,'repo':{'full_name':p.REPO}},'base':{'sha':'d'*40,'ref':'main','repo':{'full_name':p.REPO}}}
+        responses={'':{'default_branch':'main'},'pulls/1':pr}
+        env={'TARGET_NUMBER':'1','EXPECTED_SHA':'a'*40,'GITHUB_RUN_ID':'7','GITHUB_ACTOR':'writer','GITHUB_REF':'refs/heads/main'}
+        with patch.dict(os.environ,env),patch.object(p,'check_writer'),patch.object(p,'repo_api',side_effect=lambda key:responses[key]):
+            with self.assertRaisesRegex(ValueError,'base changed'): p.verify_meta(meta,'review')
 
 if __name__ == '__main__': unittest.main()

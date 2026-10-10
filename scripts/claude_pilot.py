@@ -109,7 +109,7 @@ def output(key, value):
     with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
         f.write(f'{key}<<{delimiter}\n{value}\n{delimiter}\n')
 
-def dump(path, data): Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+def dump(path, data): Path(path).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8', newline='\n')
 
 def load(path):
     raw = Path(path).read_bytes()
@@ -126,7 +126,14 @@ def prepare(mode):
     meta = {'mode':mode, 'number':n, 'sha':expected, 'default':default, 'actor':os.environ['GITHUB_ACTOR'], 'run_id':os.environ['GITHUB_RUN_ID']}
     if mode == 'review':
         pr = repo_api(f'pulls/{n}'); review_target(pr, expected, default)
-        files = repo_api(f'pulls/{n}/files?per_page=100')
+        diff_base = sha(pr['base']['sha'])
+        # Both inputs are immutable: a PR A->B->A move cannot replace this diff.
+        comparison = repo_api(f'compare/{diff_base}...{expected}')
+        if comparison.get('base_commit', {}).get('sha') != diff_base or comparison.get('status') not in {'ahead', 'diverged'} or not comparison.get('commits') or comparison['commits'][-1]['sha'] != expected:
+            raise ValueError('comparison does not match immutable base and head')
+        meta['diff_base_sha'] = diff_base
+        meta['diff_merge_base_sha'] = sha(comparison['merge_base_commit']['sha'])
+        files = comparison['files']
         if len(files) != pr['changed_files'] or len(files)>40: raise ValueError('large PR exceeds pilot; no partial review')
         if any('patch' not in x for x in files): raise ValueError('binary or missing patch requires manual review')
         for item in files:
@@ -173,7 +180,10 @@ def verify_meta(meta, mode):
     check_writer(meta['actor'])
     default = repo_api('')['default_branch']
     if default != meta['default'] or os.environ['GITHUB_REF'] != 'refs/heads/'+default: raise ValueError('default branch changed')
-    if mode == 'review': review_target(repo_api(f'pulls/{meta["number"]}'),meta['sha'],default)
+    if mode == 'review':
+        pr = repo_api(f'pulls/{meta['number']}')
+        review_target(pr, meta['sha'], default)
+        same_base(meta['diff_base_sha'], pr['base']['sha'])
     else:
         if meta['scope'] != os.environ['PLUGIN_SCOPE']: raise ValueError('scope mismatch')
         same_base(meta['sha'],repo_api('git/ref/heads/'+urllib.parse.quote(default,safe=''))['object']['sha'])
@@ -198,22 +208,43 @@ def apply_proposal():
     matches[0]['version']=new['version']; dump(market,data)
     return changes
 
+def source_digest(changes):
+    # Bind the attestation to actual source bytes, including unchanged tracked
+    # files and non-ignored additions. Runtime artifacts under .pilot are separate.
+    paths = set(subprocess.check_output(['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard']).decode('utf-8').split('\0'))
+    paths.update(item['path'] for item in changes)
+    paths = sorted(path for path in paths if path and not path.startswith('.pilot/'))
+    if len(paths) > 5000: raise ValueError('source tree exceeds pilot bound')
+    root = Path.cwd().resolve(); files = []; total = 0
+    for path in paths:
+        target = root / path
+        if target.is_symlink() or any(x.is_symlink() for x in target.parents if x != root) or not target.resolve().is_relative_to(root) or not target.is_file():
+            raise ValueError('source tree contains missing or unsafe file')
+        size = target.stat().st_size; total += size
+        if size > 10000000 or total > 64000000: raise ValueError('source tree exceeds pilot byte bound')
+        files.append({'path': path, 'sha256': hashlib.sha256(target.read_bytes()).hexdigest(), 'mode': '100755' if target.stat().st_mode & 0o111 else '100644'})
+    return hashlib.sha256(json.dumps(files, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
 def test_proposal():
     before={name:Path('.pilot/'+name).read_bytes() for name in ['meta.json','report.json']}
-    apply_proposal()
+    changes = apply_proposal()
+    source = source_digest(changes)
     # No model secret is present in this job; do not pass GitHub/artifact tokens to candidate tests.
     environment={k:v for k,v in os.environ.items() if k in {'PATH','HOME','USERPROFILE','SYSTEMROOT','TEMP','TMP','CI'}}
     scope=load('.pilot/meta.json')['scope']
     for command in [['claude','plugin','validate',f'plugins/{scope}'], ['claude','plugin','test',f'plugins/{scope}']]:
         subprocess.run(command, env=environment, check=True, timeout=180)
+        if source_digest(changes) != source: raise ValueError('candidate command modified the source tree')
     if any(Path('.pilot/'+name).read_bytes()!=value for name,value in before.items()):
         raise ValueError('candidate tests modified the trusted proposal artifacts')
+    same_base(load('.pilot/meta.json')['sha'], subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip())
+    if source_digest(changes) != source: raise ValueError('candidate tests modified the source tree')
     digest=hashlib.sha256(Path('.pilot/report.json').read_bytes()).hexdigest()
-    dump('.pilot/tested.json',{'report_sha256':digest,'base':load('.pilot/meta.json')['sha'],'tests':'plugin validate + plugin test'})
+    dump('.pilot/tested.json',{'report_sha256':digest,'source_sha256':source,'base':load('.pilot/meta.json')['sha'],'tests':'plugin validate + plugin test'})
 
 def post_review():
     meta=load('.pilot/meta.json'); verify_meta(meta,'review')
-    body=review_comment(load('.pilot/report.json'),meta['sha'])
+    body=review_comment(load('.pilot/report.json'),meta['sha'])+'\nImmutable comparison base: `'+meta['diff_base_sha']+'`; merge base: `'+meta['diff_merge_base_sha']+'`.'
     # COMMENT only. Never APPROVE, merge, run a PR script, or checkout its HEAD.
     repo_api(f'pulls/{meta["number"]}/reviews',{'commit_id':meta['sha'],'body':body,'event':'COMMENT'})
 
@@ -221,12 +252,14 @@ def publish():
     meta=load('.pilot/meta.json'); verify_meta(meta,'implement')
     tested=load('.pilot/tested.json')
     if tested['base']!=meta['sha'] or tested['report_sha256']!=hashlib.sha256(Path('.pilot/report.json').read_bytes()).hexdigest(): raise ValueError('tested proposal mismatch')
+    if not re.fullmatch(r'[0-9a-f]{64}', tested.get('source_sha256', '')): raise ValueError('tested source attestation missing')
     changes=apply_proposal()
+    if source_digest(changes) != tested['source_sha256']: raise ValueError('published source differs from tested source')
     changes += [{'path':'.claude-plugin/marketplace.json','content':Path('.claude-plugin/marketplace.json').read_text(encoding='utf-8')}]
     tree=[]
     for item in changes:
         blob=repo_api('git/blobs',{'content':item['content'],'encoding':'utf-8'})
-        tree.append({'path':item['path'],'mode':'100644','type':'blob','sha':blob['sha']})
+        tree.append({'path':item['path'],'mode':'100755' if Path(item['path']).stat().st_mode & 0o111 else '100644','type':'blob','sha':blob['sha']})
     parent=repo_api(f'git/commits/{meta["sha"]}')
     created=repo_api('git/trees',{'base_tree':parent['tree']['sha'],'tree':tree})
     commit=repo_api('git/commits',{'message':f'Pilot implementation for #{meta["number"]}', 'tree':created['sha'],'parents':[meta['sha']]})
@@ -235,7 +268,7 @@ def publish():
     branch=f'claude-pilot/issue-{meta["number"]}-run-{meta["run_id"]}'
     repo_api('git/refs',{'ref':'refs/heads/'+branch,'sha':commit['sha']})
     print('Created isolated branch:',branch,'HEAD:',commit['sha'],'(preserve this ref if draft creation fails)')
-    body=f'Implements #{meta["number"]} from immutable base `{meta["sha"]}`.\n\nSelected plugin: `{meta["scope"]}`. Tests: {tested["tests"]}.\nTested proposal SHA256: `{tested["report_sha256"]}`.\n\nDraft only. Dispatch Claude reviewer with this PR number and HEAD `{commit["sha"]}`, then require human independent review and CI. No automatic merge.\n\nGITHUB_TOKEN-created PRs do not trigger normal pull_request workflows; run required CI separately before considering merge.'
+    body=f'Implements #{meta["number"]} from immutable base `{meta["sha"]}`.\n\nSelected plugin: `{meta["scope"]}`. Tests: {tested["tests"]}.\nTested proposal SHA256: `{tested["report_sha256"]}`.\nTested source SHA256: `{tested["source_sha256"]}`.\n\nDraft only. Dispatch Claude reviewer with this PR number and HEAD `{commit["sha"]}`, then require human independent review and CI. No automatic merge.\n\nGITHUB_TOKEN-created PRs do not trigger normal pull_request workflows; run required CI separately before considering merge.'
     pr=repo_api('pulls',{'title':f'Draft: issue #{meta["number"]} ({meta["scope"]})','head':branch,'base':meta['default'],'body':body,'draft':True})
     print('Draft PR:',pr['html_url'],'HEAD:',commit['sha'])
 
