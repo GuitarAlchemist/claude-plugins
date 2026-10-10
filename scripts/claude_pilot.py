@@ -13,7 +13,7 @@ import uuid
 
 REPO = 'GuitarAlchemist/claude-plugins'
 LIMIT = 80000
-SCOPES = {'fleet', 'ga-chatbot', 'observatory-guard', 'session-inbox', 'shared-repo-guard'}
+SCOPES = {'fleet', 'session-inbox', 'shared-repo-guard'}
 
 def number(value):
     if not re.fullmatch(r'[1-9][0-9]{0,8}', str(value)): raise ValueError('positive issue/PR number required')

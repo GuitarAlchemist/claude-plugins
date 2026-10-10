@@ -117,6 +117,7 @@ class PolicyTests(unittest.TestCase):
                         self.assertFalse(step['with']['show_full_output'])
             self.assertNotIn('write', data['jobs'][model_job]['permissions'].values())
             if model_job == 'propose':
+                self.assertEqual(set(triggers['workflow_dispatch']['inputs']['plugin']['options']), p.SCOPES)
                 self.assertEqual(data['jobs']['draft']['needs'], ['propose', 'test'])
                 publish_env = data['jobs']['draft']['steps'][-1]['env']
                 for name in ['meta', 'report']:

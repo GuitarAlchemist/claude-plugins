@@ -14,7 +14,7 @@ on:
         description: Only this plugin may change
         required: true
         type: choice
-        options: [fleet, ga-chatbot, observatory-guard, session-inbox, shared-repo-guard]
+        options: [fleet, session-inbox, shared-repo-guard]
 permissions: {}
 concurrency:
   group: claude-implement-${{ inputs.issue_number }}

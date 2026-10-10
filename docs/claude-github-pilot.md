@@ -2,6 +2,8 @@
 
 This change prepares two disabled-by-default workflows for **GuitarAlchemist/claude-plugins**. It does not install an App, create a secret, enable a variable, or invoke Claude. There is no API-key fallback.
 
+The pilot branch is based on default-branch commit `28ea4112526a38edcff7a3a6e77f445eca1f4a60` and contains only the five pilot workflow/controller/test/documentation files. The implementation choices are the three plugins already present there: `fleet`, `session-inbox`, and `shared-repo-guard`. It includes no Observatory PR2 changes or dependency on that PR.
+
 - `claude-review.yml`: a repository writer selects an open same-repository PR and its exact HEAD. A bounded diff is read through GitHub's immutable base-SHA/head-SHA comparison API, never checked out. The comparison response must match both SHAs; its merge base is recorded. Claude returns one structured report without tools. A separate job rechecks HEAD, comparison base, and writer access, then submits **COMMENT**, containing SHA, TLDR, verdict, and an evidence checklist. It never approves or merges.
 - `claude-implement.yml`: a writer selects an open issue authored by a human writer, current default-branch SHA, and one plugin. Claude proposes complete files as bounded JSON without tools. A separate job without the subscription secret applies restricted paths, validates and tests that plugin. A third job rechecks access, issue revision, base, artifact digest, and actual source digest, then creates an isolated branch and **draft PR**. Independent review remains a manual separate reviewer dispatch and human review.
 
