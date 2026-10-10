@@ -1,0 +1,133 @@
+name: Claude manual issue draft pilot
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Open issue authored by a human repository writer
+        required: true
+        type: string
+      expected_base:
+        description: Exact lowercase 40-character current default-branch SHA
+        required: true
+        type: string
+      plugin:
+        description: Only this plugin may change
+        required: true
+        type: choice
+        options: [fleet, session-inbox, shared-repo-guard]
+permissions: {}
+concurrency:
+  group: claude-implement-${{ inputs.issue_number }}
+  cancel-in-progress: false
+env:
+  TARGET_NUMBER: ${{ inputs.issue_number }}
+  EXPECTED_SHA: ${{ inputs.expected_base }}
+  PLUGIN_SCOPE: ${{ inputs.plugin }}
+jobs:
+  propose:
+    if: vars.CLAUDE_IMPLEMENT_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      meta_sha256: ${{ steps.capture.outputs.meta_sha256 }}
+      report_sha256: ${{ steps.capture.outputs.report_sha256 }}
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: input
+        name: Verify actor, issue author, base, and selected plugin
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/claude_pilot.py prepare-implement
+      - id: cli
+        name: Pin Claude CLI before injecting subscription credential
+        run: |
+          npm install -g @anthropic-ai/claude-code@2.1.293
+          echo "path=$(command -v claude)" >> "$GITHUB_OUTPUT"
+      - id: claude
+        name: Tool-free single-pass subscription proposal
+        uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # verified v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          path_to_claude_code_executable: ${{ steps.cli.outputs.path }}
+          prompt: ${{ steps.input.outputs.prompt }}
+          show_full_output: false
+          display_report: false
+          classify_inline_comments: false
+          claude_args: >-
+            --safe-mode --tools= --disallowedTools 'mcp__*'
+            --strict-mcp-config --mcp-config '{"mcpServers":{}}'
+            --max-turns 1 --disable-slash-commands --no-session-persistence
+            --json-schema '{"type":"object","additionalProperties":false,"required":["summary","changes"],"properties":{"summary":{"type":"string","maxLength":1000},"changes":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string","maxLength":40000}}}}}}'
+      - id: capture
+        name: Validate bounded proposal and authenticate producer artifacts
+        env:
+          STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
+        run: python3 scripts/claude_pilot.py capture-implement
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # Node 24
+        with:
+          name: proposal-${{ github.run_id }}
+          path: |
+            .pilot/meta.json
+            .pilot/report.json
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: error
+  test:
+    needs: propose
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: proposal-${{ github.run_id }}
+          path: .pilot
+      - name: Install same CLI as repository checks; no subscription credential in this job
+        run: npm install -g @anthropic-ai/claude-code@2.1.293
+      - name: Apply restricted files and validate/test selected plugin without tokens
+        run: python3 scripts/claude_pilot.py test
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: tested-${{ github.run_id }}
+          path: |
+            .pilot/meta.json
+            .pilot/report.json
+            .pilot/tested.json
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: error
+  draft:
+    needs: [propose, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
+        with:
+          name: tested-${{ github.run_id }}
+          path: .pilot
+      - name: Recheck base and permissions; isolated ref and draft PR via trusted API writer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_META_SHA256: ${{ needs.propose.outputs.meta_sha256 }}
+          PRODUCER_REPORT_SHA256: ${{ needs.propose.outputs.report_sha256 }}
+        run: python3 scripts/claude_pilot.py publish
