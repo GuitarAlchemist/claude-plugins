@@ -61,7 +61,7 @@ jobs:
           display_report: false
           classify_inline_comments: false
           claude_args: >-
-            --safe-mode --tools '' --disallowedTools 'mcp__*'
+            --safe-mode --tools= --disallowedTools 'mcp__*'
             --strict-mcp-config --mcp-config '{"mcpServers":{}}'
             --max-turns 1 --disable-slash-commands --no-session-persistence
             --json-schema '{"type":"object","additionalProperties":false,"required":["summary","changes"],"properties":{"summary":{"type":"string","maxLength":1000},"changes":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string","maxLength":40000}}}}}}'
@@ -73,7 +73,9 @@ jobs:
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # Node 24
         with:
           name: proposal-${{ github.run_id }}
-          path: .pilot/*.json
+          path: |
+            .pilot/meta.json
+            .pilot/report.json
           include-hidden-files: true
           retention-days: 1
           if-no-files-found: error
@@ -99,7 +101,10 @@ jobs:
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: tested-${{ github.run_id }}
-          path: .pilot/*.json
+          path: |
+            .pilot/meta.json
+            .pilot/report.json
+            .pilot/tested.json
           include-hidden-files: true
           retention-days: 1
           if-no-files-found: error

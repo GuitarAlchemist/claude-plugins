@@ -111,7 +111,7 @@ class PolicyTests(unittest.TestCase):
                     if job_name != model_job: self.assertNotIn('secrets.',json.dumps(step))
                     if step.get('uses','').startswith('anthropics/claude-code-action@'):
                         args=step['with']['claude_args']
-                        self.assertIn("--tools ''",args); self.assertIn('--max-turns 1',args)
+                        self.assertIn("--tools=",args); self.assertIn('--max-turns 1',args)
                         self.assertIn('--safe-mode',args); self.assertIn("--disallowedTools 'mcp__*'",args)
                         self.assertNotIn('anthropic_api_key',step['with'])
                         self.assertFalse(step['with']['show_full_output'])
@@ -149,6 +149,36 @@ class PolicyTests(unittest.TestCase):
 class RegressionTests(unittest.TestCase):
     def producer_environment(self):
         return {'PRODUCER_'+name.upper()+'_SHA256':p.hashlib.sha256(pathlib.Path('.pilot/'+name+'.json').read_bytes()).hexdigest() for name in ['meta','report']}
+
+    def test_candidate_extra_json_is_not_uploaded(self):
+        import yaml
+        repo=pathlib.Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);self.fixture(root);previous=os.getcwd()
+            try:
+                os.chdir(root)
+                real_run=p.subprocess.run
+                def candidate(args, **kwargs):
+                    if args[0]=='claude':
+                        pathlib.Path('.pilot/candidate-extra.json').write_text('{"candidate":"extra"}')
+                    else:
+                        return real_run(args, **kwargs)
+                with patch.object(p.subprocess,'run',side_effect=candidate): p.test_proposal()
+                self.assertTrue(pathlib.Path('.pilot/tested.json').exists())
+                self.assertTrue(pathlib.Path('.pilot/candidate-extra.json').exists())
+                for name,job,expected in [
+                    ('claude-review.yml','review',{'meta.json','report.json'}),
+                    ('claude-implement.yml','propose',{'meta.json','report.json'}),
+                    ('claude-implement.yml','test',{'meta.json','report.json','tested.json'}),
+                ]:
+                    with self.subTest(workflow=name,job=job):
+                        data=yaml.safe_load((repo/'.github/workflows'/name).read_text())
+                        upload=next(step for step in data['jobs'][job]['steps'] if step.get('uses','').startswith('actions/upload-artifact@'))
+                        selected={path.name for pattern in upload['with']['path'].splitlines() for path in root.glob(pattern.strip())}
+                        self.assertEqual(selected,expected)
+                        self.assertNotIn('candidate-extra.json',selected)
+            finally:
+                os.chdir(previous)
 
     def test_documentation_issue_requires_and_applies_version_bump(self):
         with tempfile.TemporaryDirectory() as d:
