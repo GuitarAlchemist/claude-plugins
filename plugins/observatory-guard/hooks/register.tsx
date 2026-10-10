@@ -7,6 +7,7 @@ import {
   COMFY_SCRIPT,
   comfyFrom,
   copiesIntoDlss,
+  dlssCopySources,
   forkWithFixedFps,
   godotFor,
   isScript,
@@ -120,9 +121,13 @@ async function snapshot($: EngineInterface): Promise<Snapshot> {
 async function changedScriptNotes($: EngineInterface, before: Snapshot): Promise<string[]> {
   const after = await snapshot($)
   const roots = await liveRoots($)
-  const changed = [...after.entries()].filter(([path, mtime]) => before.get(path) !== mtime).map(([path]) => path)
+  const changed = [...new Set([...before.keys(), ...after.keys()])].filter(path => before.get(path) !== after.get(path))
   const notes: string[] = []
   for (const path of changed.slice(0, 8)) {
+    if (!after.has(path)) {
+      notes.push(`observatory-guard: removed watched script ${path}; scenes that depend on it may fail to load. Restore it or verify its dependents before continuing.`)
+      continue
+    }
     const root = rootOf(path, roots)
     if (!root) continue
     try {
@@ -133,7 +138,7 @@ async function changedScriptNotes($: EngineInterface, before: Snapshot): Promise
     }
   }
   if (changed.length > 8) notes.push(`observatory-guard: ${changed.length - 8} more changed scripts were not checked.`)
-  if (notes.length) $.ui.toast(`observatory-guard : ${notes.length} script(s) ne parsent plus`, { timeoutMs: 8000 })
+  if (notes.length) $.ui.toast(`observatory-guard : ${notes.length} avertissement(s) de scripts`, { timeoutMs: 8000 })
   return notes
 }
 
@@ -236,21 +241,27 @@ function refusal(rule: string, why: string, answer: string | undefined): string 
 async function beforeShell($: EngineInterface, command: string): Promise<string | undefined> {
   const text = await commandText($, command)
 
-  if (copiesIntoDlss(text)) {
-    const [proto] = await liveRoots($)
-    const broken: string[] = []
-    for (const rel of proto ? (await outOfSync($)).slice(0, 12) : []) {
-      const c = await checkScript($, proto ?? '', `${proto}/${rel}`)
-      if (!c.ok) broken.push(`${rel}: ${c.errors.slice(0, 2).join(' | ')}`)
-    }
-    if (broken.length) {
-      $.ui.toast('observatory-guard : copie vers observatory-dlss refusée (script cassé)', { timeoutMs: 8000 })
-      return [
-        'observatory-guard: refused (copy-broken). The command copies into C:/tmp/observatory-dlss, the native demo the author launches,',
-        'while scripts that differ between the two projects do not parse in the prototype:',
-        ...broken.map(b => `  ${b}`),
-        'Fix them in the prototype first (--check-only and -- --selftest), then copy.',
-      ].join('\n')
+  const [, copy] = await liveRoots($)
+  let cwd = ''
+  try { cwd = slash(await $.session.cwd()) } catch { /* unresolved relative paths fail closed */ }
+  const inCopy = !!copy && (cwd.toLowerCase() === copy.toLowerCase() || cwd.toLowerCase().startsWith(`${copy.toLowerCase()}/`))
+  if (copiesIntoDlss(text) || (inCopy && /\b(?:Copy-Item|cpi|cp|copy|robocopy|xcopy|shutil\.copy\w*|copyfile)\b/i.test(text))) {
+    try {
+      const jobs = dlssCopySources(text, cwd, copy ?? '')
+      if (jobs.error) return `observatory-guard: refused (copy-unverified). ${jobs.error}. Use explicit literal single-script copies; no copy has run.`
+      for (const path of jobs.sources) {
+        // Check the actual source in its actual project, not a similarly named prototype file.
+        const root = path.match(/^(.*)\/(?:scripts|artpass\/dlss)\/[^/]+\.gd$/i)?.[1]
+        if (!root || !(await $.fs.exists(path))) return `observatory-guard: refused (copy-unverified). Cannot locate the source project for ${path}.`
+        const c = await checkScript($, root, path)
+        if (c.skipped) return `observatory-guard: refused (copy-unverified). ${path}: ${c.skipped}.`
+        if (!c.ok) {
+          $.ui.toast('observatory-guard : copie vers observatory-dlss refusee (script casse)', { timeoutMs: 8000 })
+          return `observatory-guard: refused (copy-broken). The actual source ${path} does not parse in ${root}: ${c.errors.slice(0, 2).join(' | ')}. Fix it before copying.`
+        }
+      }
+    } catch (err) {
+      return `observatory-guard: refused (copy-unverified). Could not validate the actual copy source (${errText(err)}).`
     }
   }
 

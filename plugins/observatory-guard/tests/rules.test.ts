@@ -195,3 +195,20 @@ describe('errors', () => {
     expect(parseErrors("File 'C:\\tmp\\godot-nvidia-dlss\\godot\\bin\\/sl.nis.dll' is signed by NVIDIA and the signature was verified.")).toEqual([])
   })
 })
+
+describe('window launches without --path', () => {
+  test('bare, editor and script launches still open a window', async () => {
+    expect(opensGodotWindow('godot.exe')).toBe(true)
+    expect(opensGodotWindow('godot.exe --editor')).toBe(true)
+    expect(opensGodotWindow('godot.exe --script res://probe.gd')).toBe(true)
+    expect(opensGodotWindow(`& '${STOCK}' --headless; & '${STOCK}' --editor`)).toBe(true)
+  })
+  test('headless and non-window modes without --path remain allowed', async () => {
+    expect(opensGodotWindow('godot.exe --headless')).toBe(false)
+    expect(opensGodotWindow('godot.exe --help')).toBe(false)
+    expect(opensGodotWindow('godot.exe --version')).toBe(false)
+    expect(opensGodotWindow('godot.exe --check-only --script res://probe.gd')).toBe(false)
+    expect(opensGodotWindow('godot.exe --import')).toBe(false)
+    expect(opensGodotWindow('godot.exe --export-release Windows out.exe')).toBe(false)
+  })
+})

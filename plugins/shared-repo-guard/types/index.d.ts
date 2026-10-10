@@ -17,6 +17,7 @@ export type SharedRepoGuardPr = {
   failing: string[]
   pending: string[]
   passed: number
+  unresolvedReviews: number | null
 }
 
 export type SharedRepoGuardPrMeta = { isLoading: boolean; readAt: string; errors: string[] }

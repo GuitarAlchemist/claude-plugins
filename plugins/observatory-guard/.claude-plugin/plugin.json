@@ -1,6 +1,6 @@
 {
   "name": "observatory-guard",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": { "name": "Stephane Pareilleux" },
   "description": "Keeps the Observatory prototype and its DLSS copy runnable while sessions edit them: checks each changed scene or demo script with Godot --check-only, refuses a copy of a broken script into the DLSS copy, refuses a DLSS-fork run with --fixed-fps, asks before a Godot window opens over the author's demo or a command stops it or their ComfyUI on port 8188; adds a /godot pane.",
   "types": "./types/index.d.ts"

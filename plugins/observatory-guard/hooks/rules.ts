@@ -65,16 +65,24 @@ export function scriptPaths(command: string): string[] {
   return [...out].slice(0, 6)
 }
 
-// A Godot run that opens a window: Godot named, more `--path` than `--headless`, or the demo's launcher.
+// Judge each invocation, including a bare executable (Godot uses the current project or opens
+// its project manager). Assignments are not launches; headless flags apply only to that invocation.
 export function opensGodotWindow(text: string): boolean {
-  if (/observatory-dlss\.cmd/i.test(text)) return true
-  if (!/godot[^\s"'\\/]*\.exe/i.test(text)) return false
-  if (/--check-only|--export-(?:release|debug|pack)|--import\b/.test(text) && !/--resolution|--maximized|--fullscreen/.test(text)) {
-    return false
+  const exe = /godot[^\s"'\\/]*\.exe/i
+  const vars = new Set<string>()
+  for (const m of text.matchAll(/\$(\w+)\s*=\s*['"]([^'"\n]+)['"]/g)) {
+    if (exe.test(m[2] ?? '')) vars.add(m[1] ?? '')
   }
-  const paths = text.match(/--path\b/g)?.length ?? 0
-  const headless = text.match(/--headless\b/g)?.length ?? 0
-  return paths > headless
+  return text.split(/\r?\n|;|&&|\|\|/).some(statement => {
+    if (/observatory-dlss\.cmd/i.test(statement)) return true
+    if (/^\s*\$\w+\s*=\s*['"][^'"]+['"]\s*$/.test(statement)) return false
+    const viaVariable = [...vars].some(v =>
+      new RegExp(`(?:&\\s*|-(?:FilePath|f)\\s+)\\$${v}\\b`, 'i').test(statement))
+    if (!exe.test(statement) && !viaVariable) return false
+    if (/--(?:headless|help|version)\b/.test(statement)) return false
+    return !/--check-only|--export-(?:release|debug|pack)|--import\b/.test(statement) ||
+      /--resolution|--maximized|--fullscreen/.test(statement)
+  })
 }
 
 // A run of NVIDIA's DLSS fork with --fixed-fps. On 2026-10-03, under path tracing with Ray
@@ -201,4 +209,55 @@ export function shortCmd(cmd: string): string {
   const m = cmd.match(/^\s*"?[^"]*?([^\\/"]+\.exe)"?\s*(.*)$/i)
   const text = m ? `${m[1]} ${m[2]}` : cmd
   return text.replace(/\s+/g, ' ').trim()
+}
+
+// Supported copy guard syntax: literal single-file Copy-Item/cp/copy commands only. Directory,
+// wildcard, computed, wrapper and script copies require an explicit supported form first.
+export function dlssCopySources(text: string, cwd: string, copy: string): { sources: string[]; error?: string } {
+  const sources: string[] = []
+  const resolve = (path: string) => {
+    const p = slash(path)
+    if (/[\$`*?{}()[\],]|(?:^|\/)\.\.(?:\/|$)/.test(p)) return undefined
+    return /^[A-Za-z]:\//.test(p) || p.startsWith('/') ? p : cwd ? `${cwd}/${p.replace(/^\.\//, '')}` : undefined
+  }
+  const statements = text.split(/\r?\n|;/).filter(s => copiesIntoDlss(s) || /^\s*(?:Copy-Item|cpi|cp|copy)\b/i.test(s))
+  if (!statements.length) return { sources, error: 'no literal copy statement could be resolved' }
+  for (const statement of statements) {
+    const tokens: string[] = []
+    const pattern = /\s*(?:"([^"\n]*)"|'([^'\n]*)'|([^\s"']+))/gy
+    let at = 0
+    while (at < statement.length) {
+      pattern.lastIndex = at
+      const m = pattern.exec(statement)
+      if (!m) {
+        if (statement.slice(at).trim()) return { sources, error: 'unsupported copy syntax' }
+        break
+      }
+      tokens.push(m[1] ?? m[2] ?? m[3] ?? '')
+      at = pattern.lastIndex
+    }
+    const cmd = (tokens.shift() ?? '').toLowerCase()
+    if (!['copy-item', 'cpi', 'cp', 'copy'].includes(cmd)) return { sources, error: 'unsupported copy program or wrapper' }
+    let source: string | undefined
+    let destination: string | undefined
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i] ?? ''
+      if (/^-(?:path|literalpath)$/i.test(t) && cmd === 'copy-item') source = tokens[++i]
+      else if (/^-destination$/i.test(t) && cmd === 'copy-item') destination = tokens[++i]
+      else if (/^(?:-force|-f|--|\/y)$/i.test(t)) continue
+      else if (t.startsWith('-') || ['&', '|', '>', '<'].some(c => t.includes(c))) return { sources, error: 'unsupported copy option or shell operator' }
+      else if (!source) source = t
+      else if (!destination) destination = t
+      else return { sources, error: 'copy must name exactly one source and destination' }
+    }
+    const src = source ? resolve(source) : undefined
+    const dst = destination ? resolve(destination) : undefined
+    if (!src || !dst) return { sources, error: 'copy paths must be literal and resolvable' }
+    const target = copy.toLowerCase()
+    if (dst.toLowerCase() !== target && !dst.toLowerCase().startsWith(`${target}/`)) continue
+    if (!isScript(src)) return { sources, error: 'only explicit single-script copies can be checked' }
+    sources.push(src)
+  }
+  if (sources.length > 12) return { sources, error: 'copy exceeds 12 scripts' }
+  return { sources: [...new Set(sources)] }
 }

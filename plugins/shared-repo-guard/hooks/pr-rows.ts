@@ -2,7 +2,7 @@ import type { SharedRepoGuardPr, SharedRepoGuardPrCi } from '../types'
 
 // What `gh pr list --json` answers, turned into the rows the /prs pane draws. Pure: no `$` here.
 
-export const REPOS = ['spareilleux/learn', 'GuitarAlchemist/ga', 'GuitarAlchemist/ix', 'GuitarAlchemist/Demerzel']
+export const REPOS = ['spareilleux/learn', 'GuitarAlchemist/ga', 'GuitarAlchemist/ix', 'GuitarAlchemist/Demerzel', 'GuitarAlchemist/claude-plugins']
 export const FIELDS = 'number,title,headRefName,headRefOid,isDraft,mergeable,reviewDecision,statusCheckRollup,url,updatedAt'
 
 type GhCheck = { name?: string; context?: string; conclusion?: string; state?: string; status?: string }
@@ -17,6 +17,7 @@ export type GhPr = {
   statusCheckRollup: GhCheck[] | null
   url: string
   updatedAt: string
+  reviewThreads?: { head: string; complete: boolean; unresolved: number }
 }
 
 const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE'])
@@ -51,10 +52,15 @@ export function toRow(repo: string, p: GhPr): SharedRepoGuardPr {
     failing,
     pending,
     passed,
+    unresolvedReviews: p.reviewThreads?.head === p.headRefOid && p.reviewThreads.complete
+      ? p.reviewThreads.unresolved : null,
   }
 }
 
 export const GLYPH: Record<SharedRepoGuardPrCi, string> = { pass: '✓', fail: '✗', pending: '…', none: '·' }
 export const COLOR: Record<SharedRepoGuardPrCi, string> = { pass: 'green', fail: 'red', pending: 'yellow', none: 'gray' }
 
-export const needsAttention = (r: SharedRepoGuardPr) => r.ci !== 'pass' || r.mergeable === 'CONFLICTING'
+// Resolution/outdated flags are not proof of a fix; keep the approval separate.
+// This clears only displayed CI/review alerts, not dependencies or merge authorization.
+export const needsAttention = (r: SharedRepoGuardPr) => r.ci !== 'pass' || r.mergeable !== 'MERGEABLE' ||
+  r.isDraft || r.review !== 'APPROVED' || r.unresolvedReviews !== 0
