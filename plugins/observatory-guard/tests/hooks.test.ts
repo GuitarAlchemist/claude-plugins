@@ -377,3 +377,20 @@ test('PowerShell interpolated assignment copies are held before any shell or che
   expect(f.ran()).toBe(false)
   expect(f.checked.length).toBe(0)
 })
+
+
+test('PowerShell interpolation with quoted parentheses is held before any shell or checker', async ($, on) => {
+  const f = copyFixture(on, false)
+  const copy = 'Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd'
+  for (const command of [
+    '$copied = "$(\')\'; ' + copy + ')"',
+    '$copied = "$((\'literal\'); ' + copy + ')"',
+    '$copied = "$(((' + copy + ')))"',
+    '$copied = "$(# ignored )\n' + copy + ')"',
+  ]) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/copy-unverified/)
+  }
+  expect(f.ran()).toBe(false)
+  expect(f.checked.length).toBe(0)
+})

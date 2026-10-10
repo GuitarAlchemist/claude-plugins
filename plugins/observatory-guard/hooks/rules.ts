@@ -213,12 +213,234 @@ function shellStatements(text: string): string[] {
       i = end < 0 ? text.length : end + 1
       continue
     }
-    if (c === ';' || c === '\n' || c === '|' || c === '{' || c === '}' || (c === '&' && (text[i + 1] === '&' || part.trim()))) {
+    // An assignment's call operator belongs to its RHS, not a new statement.
+    const assignedCall = c === '&' && /^(?:\[[\w.]+(?:\[\])?\]\s*)?\$[\w:]+\s*=\s*(?:[$@]?\(\s*)*$/.test(part.trim())
+    if (c === ';' || c === '\n' || c === '|' || c === '{' || c === '}' || (c === '&' && (text[i + 1] === '&' || (part.trim() && !assignedCall)))) {
       finish(); if (text[i + 1] === c) i++; continue
     }
     part += c
   }
   finish()
+  return out
+}
+
+// Extract active PowerShell subexpressions without ending at parentheses inside quoted data.
+function assignmentExpressions(text: string): string[] {
+  const out: string[] = []
+  for (let i = 0; i < text.length - 1; i++) {
+    if (text[i] !== '$' || text[i + 1] !== '(') continue
+    let escapes = 0
+    for (let k = i - 1; k >= 0 && text.charCodeAt(k) === 96; k--) escapes++
+    if (escapes % 2 !== 0) continue
+    let nesting = 1, quote = '', end = i + 2
+    for (; end < text.length; end++) {
+      const c = text[end] ?? ''
+      if (c.charCodeAt(0) === 96 && quote !== "'") { end++; continue }
+      if (quote) {
+        if (c === quote) {
+          if (quote === "'" && text[end + 1] === "'") end++
+          else quote = ''
+        }
+        continue
+      }
+      if (c === '#' && (end === i + 2 || /\s/.test(text[end - 1] ?? ''))) {
+        while (end < text.length && text[end] !== '\n') end++
+        continue
+      }
+      if (c === '<' && text[end + 1] === '#') {
+        const close = text.indexOf('#>', end + 2)
+        end = close < 0 ? text.length : close + 1
+        continue
+      }
+      if (c === '"' || c === "'") { quote = c; continue }
+      if (c === '(') nesting++
+      else if (c === ')' && --nesting === 0) break
+    }
+    // Incomplete expressions are still inspected conservatively, never executed by this guard.
+    out.push(text.slice(i + 2, end))
+    i = end
+  }
+  return out
+}
+
+function copyStatements(text: string, depth = 0): string[] {
+  return shellStatements(text).filter(statement => {
+    // A double-quoted PowerShell assignment may execute $(); single quotes stay data.
+    const quotedAssignment = statement.match(/^(?:\[[\w.]+(?:\[\])?\]\s*)?\$[\w:]+\s*=\s*"([\s\S]*)"\s*$/)
+    for (const expression of assignmentExpressions(quotedAssignment?.[1] ?? '')) {
+      for (const part of shellStatements(expression)) {
+        if (/^['"]/.test(part)) continue
+        if (depth < 2 ? copyStatements(part, depth + 1).length > 0 :
+          /^(?:&\s*)?(?:Copy-Item|cpi|cp|copy|robocopy|xcopy)\b/i.test(part)) return true
+      }
+    }
+    // Only unwrap executable prefixes. Keep the original statement so unsupported forms are held.
+    const prefix = statement.match(/^(?:(?:\[[\w.]+(?:\[\])?\]\s*)?\$[\w:]+\s*=\s*)?((?:(?:\$\(|@\(|\()\s*)*)(?=&\s*|[^\s"'$(@&])/)
+    let invocation = statement.slice(prefix?.[0].length ?? 0)
+    const groups = prefix?.[1].match(/\(/g)?.length ?? 0
+    for (let i = 0; i < groups; i++) invocation = invocation.replace(/\)\s*$/, '').trim()
+    const first = invocation.match(/^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|([^\s]+))/)
+    const cmd = slash(first?.[1] ?? first?.[2] ?? first?.[3] ?? '').split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
+    if (['copy-item', 'cpi', 'cp', 'copy', 'robocopy', 'xcopy'].includes(cmd)) return true
+    if (/^\s*(?:shutil\.copy\w*|copyfile)\s*\(/.test(statement)) return true
+    // These wrappers execute their code argument. Unsupported copy code is held, not run.
+    const code = invocation.match(/(?:^|\s)(?:-c|-command|\/c)\s+(?:"([^"]*)"|'([^']*)'|(.+))$/i)
+      ?? (/^(?:bash|sh)$/.test(cmd)
+        ? invocation.match(/(?:^|\s)-[A-Za-z]*c[A-Za-z]*\s+(?:"([^"]*)"|'([^']*)'|(.+))$/)
+        : null)
+    if (!code) return false
+    const body = code[1] ?? code[2] ?? code[3] ?? ''
+    if (/^python[\d.]*$|^pythonw$/.test(cmd)) return /\b(?:shutil\.copy\w*|copyfile)\s*\(/.test(body)
+    if (!/^(?:pwsh|powershell|bash|sh|cmd)$/.test(cmd)) return false
+    return depth < 2 ? copyStatements(body, depth + 1).length > 0 :
+      /\b(?:Copy-Item|cpi|cp|copy|robocopy|xcopy)\b/i.test(body)
+
+  })
+}
+
+export function copiesIntoDlss(text: string): boolean {
+  return copyStatements(text).length > 0
+}
+
+// ---- Godot processes ----
+
+export type GodotProc = { pid: number; ppid: number; cmd: string; title: string; started: string }
+export type ProcKind = 'demo' | 'editor' | 'probe' | 'headless' | 'other'
+
+// demo: what the author plays (the DLSS demo, a run from the editor, the project run bare); probe: a
+// session's --script run; editor: the editor or project manager.
+export function classify(p: GodotProc, roots: readonly string[] = []): ProcKind {
+  const cmd = p.cmd
+  if (/--headless\b/.test(cmd)) return 'headless'
+  if (/dlss_play\.gd/i.test(cmd)) return 'demo'
+  if (/--remote-debug\b/.test(cmd)) return 'demo'
+  if (/(?:^|\s)(?:-e|--editor|-p|--project-manager)(?:\s|$)/.test(cmd)) return 'editor'
+  if (/--script\b/.test(cmd)) return 'probe'
+  const project = cmd.match(/--path(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))/)
+  const path = normalizePath(project?.[1] ?? project?.[2] ?? project?.[3] ?? '')?.toLowerCase()
+  if (path && roots.some(root => root.toLowerCase() === path)) return 'demo'
+  if (/observatory/i.test(cmd) || /observatory/i.test(p.title)) return 'demo'
+  if (!/--path\b/.test(cmd)) return 'editor'
+  return 'other'
+}
+
+// What `Get-CimInstance … | ConvertTo-Json` printed: one object when one process matched, else a list.
+export function parseProcs(json: string): GodotProc[] {
+  const t = json.trim()
+  if (!t) return []
+  const raw = JSON.parse(t) as unknown
+  const list = Array.isArray(raw) ? raw : [raw]
+  return list.map(r => {
+    const o = r as Record<string, unknown>
+    return {
+      pid: Number(o.pid ?? 0),
+      ppid: Number(o.ppid ?? 0),
+      cmd: String(o.cmd ?? ''),
+      title: String(o.title ?? ''),
+      started: String(o.started ?? ''),
+    }
+  })
+}
+
+// Query only legacy Godot names and configured executable names, including window titles.
+// Quote values as PowerShell literals; configuration is never interpolated as executable code.
+export function procsScript(binaries: readonly string[] = []): string {
+  const names = [...new Set(binaries.map(path => slash(path).split('/').pop() ?? '').filter(Boolean))]
+  const literal = (value: string) => `'${value.replace(/'/g, "''")}'`
+  const filter = ["Name like 'godot%'", ...names.map(name => `Name = '${name.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`)].join(' OR ')
+  const processNames = ['godot*', ...names.map(name => name.replace(/\.exe$/i, ''))].map(literal).join(', ')
+  return [
+    `$t = @{}; Get-Process -Name @(${processNames}) -ErrorAction SilentlyContinue | ForEach-Object { $t[$_.Id] = $_.MainWindowTitle }`,
+    `Get-CimInstance Win32_Process -Filter ${literal(filter)} | ForEach-Object {`,
+    "  [pscustomobject]@{ pid = $_.ProcessId; ppid = $_.ParentProcessId; cmd = $_.CommandLine; title = $t[[int]$_.ProcessId]; started = $_.CreationDate.ToString('HH:mm') }",
+    '} | ConvertTo-Json -Compress',
+  ].join('\n')
+}
+
+export const PROCS_SCRIPT = procsScript()
+
+// The command line cut to what tells runs apart: the exe's name and the arguments.
+export function shortCmd(cmd: string): string {
+  const m = cmd.match(/^\s*"?[^"]*?([^\\/"]+\.exe)"?\s*(.*)$/i)
+  const text = m ? `${m[1]} ${m[2]}` : cmd
+  return text.replace(/\s+/g, ' ').trim()
+}
+
+// Supported copy guard syntax: literal single-file Copy-Item/cp/copy commands only. Directory,
+// wildcard, computed, wrapper and script copies require an explicit supported form first.
+export function dlssCopySources(text: string, cwd: string, copy: string): { sources: string[]; error?: string } {
+  const sources: string[] = []
+  const resolve = (path: string) => {
+    const p = slash(path)
+    if (/[\$`*?{}()[\],]/.test(p)) return undefined
+    return normalizePath(/^[A-Za-z]:\//.test(p) || p.startsWith('/') ? p : cwd ? `${cwd}/${p}` : '')
+  }
+  const statements = copyStatements(text)
+  if (!statements.length) return { sources, error: 'no literal copy statement could be resolved' }
+  for (const statement of statements) {
+    const tokens: string[] = []
+    const pattern = /\s*(?:"([^"\n]*)"|'([^'\n]*)'|([^\s"']+))/gy
+    let at = 0
+    while (at < statement.length) {
+      pattern.lastIndex = at
+      const m = pattern.exec(statement)
+      if (!m) {
+        if (statement.slice(at).trim()) return { sources, error: 'unsupported copy syntax' }
+        break
+      }
+      tokens.push(m[1] ?? m[2] ?? m[3] ?? '')
+      at = pattern.lastIndex
+    }
+    if (tokens[0] === '&') tokens.shift()
+    const cmd = slash(tokens.shift() ?? '').split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
+    if (!['copy-item', 'cpi', 'cp', 'copy'].includes(cmd)) return { sources, error: 'unsupported copy program or wrapper' }
+    let source: string | undefined
+    let destination: string | undefined
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i] ?? ''
+      if (/^-(?:path|literalpath)$/i.test(t) && cmd === 'copy-item') source = tokens[++i]
+      else if (/^-destination$/i.test(t) && cmd === 'copy-item') destination = tokens[++i]
+      else if (/^(?:-force|-f|--|\/y)$/i.test(t)) continue
+      else if (t.startsWith('-') || ['&', '|', '>', '<'].some(c => t.includes(c))) return { sources, error: 'unsupported copy option or shell operator' }
+      else if (!source) source = t
+      else if (!destination) destination = t
+      else return { sources, error: 'copy must name exactly one source and destination' }
+    }
+    const src = source ? resolve(source) : undefined
+    const dst = destination ? resolve(destination) : undefined
+    if (!src || !dst) return { sources, error: 'copy paths must be literal and resolvable' }
+    const target = normalizePath(copy)?.toLowerCase()
+    if (!target) return { sources, error: 'protected project path is unavailable' }
+    if (dst.toLowerCase() !== target && !dst.toLowerCase().startsWith(`${target}/`)) continue
+    if (!isScript(src)) return { sources, error: 'only explicit single-script copies can be checked' }
+    sources.push(src)
+  }
+  if (sources.length > 12) return { sources, error: 'copy exceeds 12 scripts' }
+  return { sources: [...new Set(sources)] }
+}
+ || text[i + 1] !== '(') continue
+    let escapes = 0
+    for (let k = i - 1; k >= 0 && text.charCodeAt(k) === 96; k--) escapes++
+    if (escapes % 2 !== 0) continue
+    let nesting = 1, quote = '', end = i + 2
+    for (; end < text.length; end++) {
+      const c = text[end] ?? ''
+      if (c === '`' && quote !== "'") { end++; continue }
+      if (quote) {
+        if (c === quote) {
+          if (quote === "'" && text[end + 1] === "'") end++
+          else quote = ''
+        }
+        continue
+      }
+      if (c === '"' || c === "'") { quote = c; continue }
+      if (c === '(') nesting++
+      else if (c === ')' && --nesting === 0) break
+    }
+    // Incomplete expressions are still inspected conservatively, never executed by this guard.
+    out.push(text.slice(i + 2, end))
+    i = end
+  }
   return out
 }
 

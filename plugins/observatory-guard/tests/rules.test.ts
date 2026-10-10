@@ -268,3 +268,16 @@ test('PowerShell interpolation copies are executable, while literal and escaped 
   expect(copiesIntoDlss('$note = "$(\'Copy-Item\')"')).toBe(false)
   expect(copiesIntoDlss('$note = "Copy-Item"')).toBe(false)
 })
+
+
+test('PowerShell interpolation preserves quoted parentheses and nested groups', async () => {
+  const copy = 'Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd'
+  for (const command of [
+    '$copied = "$(\')\'; ' + copy + ')"',
+    '$copied = "$((\'literal\'); ' + copy + ')"',
+    '$copied = "$(((' + copy + ')))"',
+    '$copied = "$(# ignored )\n' + copy + ')"',
+  ]) expect(copiesIntoDlss(command)).toBe(true)
+  expect(copiesIntoDlss('$note = "$(\')\')"')).toBe(false)
+  expect(dlssCopySources("$copied = & 'Copy-Item' C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd", 'C:/tmp', 'C:/tmp/observatory-dlss').error).toBeDefined()
+})
