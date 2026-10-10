@@ -226,3 +226,45 @@ describe('configured project and executable identities', () => {
     expect(forkWithFixedFps("& 'C:/tools/stock.exe' --fixed-fps 60", 'D:/tools/fork.exe')).toBe(false)
   })
 })
+
+describe('wrapped copy command positions', () => {
+  test('Bash combined and split code options reveal executable copies, not echoed data', async () => {
+    for (const command of [
+      "bash -lc 'cp C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd'",
+      "bash -cl 'cp C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd'",
+      "bash -l -c 'cp C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd'",
+      "/bin/bash -lc 'cp C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd'",
+    ]) expect(copiesIntoDlss(command)).toBe(true)
+    expect(copiesIntoDlss("bash -lc 'echo \"cp C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd\"'")).toBe(false)
+    expect(copiesIntoDlss("bash -lc 'echo ready # cp a.gd C:/tmp/observatory-dlss/scripts/scene.gd'")).toBe(false)
+  })
+
+  test('PowerShell assigned copy invocations reveal copies, not quoted RHS data', async () => {
+    for (const command of [
+      '$null = Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd',
+      "$copied = & 'Copy-Item' C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd",
+      '$global:copied = (Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd)',
+      '$copied = $(Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd)',
+      '$copied = @(Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd)',
+      '[string]$copied = Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd',
+    ]) expect(copiesIntoDlss(command)).toBe(true)
+    expect(copiesIntoDlss("$note = 'Copy-Item'")).toBe(false)
+    expect(copiesIntoDlss("$note = 'Copy-Item a.gd C:/tmp/observatory-dlss/scripts/scene.gd'")).toBe(false)
+    expect(copiesIntoDlss("$note = 'ready; Copy-Item a.gd C:/tmp/observatory-dlss/scripts/scene.gd'")).toBe(false)
+    expect(copiesIntoDlss("$note = ('Copy-Item')")).toBe(false)
+    expect(copiesIntoDlss('# $null = Copy-Item a.gd C:/tmp/observatory-dlss/scripts/scene.gd')).toBe(false)
+  })
+})
+
+test('PowerShell interpolation copies are executable, while literal and escaped data is not', async () => {
+  const copy = 'Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd'
+  const tick = String.fromCharCode(96)
+  expect(copiesIntoDlss('$copied = "$(' + copy + ')"')).toBe(true)
+  expect(copiesIntoDlss('[string]$copied = "$(' + copy + ')"')).toBe(true)
+  expect(copiesIntoDlss('$copied = "' + tick + tick + '$(' + copy + ')"')).toBe(true)
+  expect(copiesIntoDlss('$copied = "$(\'literal\'; ' + copy + ')"')).toBe(true)
+  expect(copiesIntoDlss('$note = "' + tick + '$(' + copy + ')"')).toBe(false)
+  expect(copiesIntoDlss("$note = '$(" + copy + ")'")).toBe(false)
+  expect(copiesIntoDlss('$note = "$(\'Copy-Item\')"')).toBe(false)
+  expect(copiesIntoDlss('$note = "Copy-Item"')).toBe(false)
+})

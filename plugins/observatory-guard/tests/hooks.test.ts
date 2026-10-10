@@ -330,3 +330,50 @@ test('configured demo is protected when stopped by its executable name', async (
   expect(f.asks()).toBe(1)
   expect(f.ran()).toBe(false)
 })
+
+test('Bash code wrappers are held before the shell without running a checker', async ($, on) => {
+  const f = copyFixture(on, false)
+  for (const command of [
+    "bash -lc 'cp C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd'",
+    "bash -cl 'cp C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd'",
+    "bash -l -c 'cp C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd'",
+  ]) {
+    const out = await $.tool.call({ tool: 'Bash', command })
+    expect(String(out.deny)).toMatch(/copy-unverified/)
+  }
+  expect(f.ran()).toBe(false)
+  expect(f.checked.length).toBe(0)
+})
+
+test('PowerShell assignment copies are held before the shell without running a checker', async ($, on) => {
+  const f = copyFixture(on, false)
+  for (const command of [
+    '$null = Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd',
+    "$copied = & 'Copy-Item' C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd",
+    '$copied = (Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd)',
+    '$copied = $(Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd)',
+    '$copied = @(Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd)',
+    '[string]$copied = Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd',
+  ]) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/copy-unverified/)
+  }
+  expect(f.ran()).toBe(false)
+  expect(f.checked.length).toBe(0)
+})
+
+test('PowerShell interpolated assignment copies are held before any shell or checker', async ($, on) => {
+  const f = copyFixture(on, false)
+  const copy = 'Copy-Item C:/other/scripts/scene.gd C:/tmp/observatory-dlss/scripts/scene.gd'
+  const tick = String.fromCharCode(96)
+  for (const command of [
+    '$copied = "$(' + copy + ')"',
+    '$copied = "' + tick + tick + '$(' + copy + ')"',
+    '$copied = "$(\'literal\'; ' + copy + ')"',
+  ]) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/copy-unverified/)
+  }
+  expect(f.ran()).toBe(false)
+  expect(f.checked.length).toBe(0)
+})

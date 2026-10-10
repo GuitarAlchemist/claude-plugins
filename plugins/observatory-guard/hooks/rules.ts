@@ -224,12 +224,32 @@ function shellStatements(text: string): string[] {
 
 function copyStatements(text: string, depth = 0): string[] {
   return shellStatements(text).filter(statement => {
-    const first = statement.match(/^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|([^\s]+))/)
+    // A double-quoted PowerShell assignment may execute $(); single quotes stay data.
+    const quotedAssignment = statement.match(/^(?:\[[\w.]+(?:\[\])?\]\s*)?\$[\w:]+\s*=\s*"([\s\S]*)"\s*$/)
+    for (const expression of quotedAssignment?.[1].matchAll(/\$\(([^)]*)\)/g) ?? []) {
+      let escapes = 0
+      for (let i = (expression.index ?? 0) - 1; i >= 0 && quotedAssignment?.[1].charCodeAt(i) === 96; i--) escapes++
+      if (escapes % 2 !== 0) continue
+      for (const part of shellStatements(expression[1] ?? '')) {
+        if (/^['"]/.test(part)) continue
+        if (depth < 2 ? copyStatements(part, depth + 1).length > 0 :
+          /^(?:&\s*)?(?:Copy-Item|cpi|cp|copy|robocopy|xcopy)\b/i.test(part)) return true
+      }
+    }
+    // Only unwrap executable prefixes. Keep the original statement so unsupported forms are held.
+    const prefix = statement.match(/^(?:(?:\[[\w.]+(?:\[\])?\]\s*)?\$[\w:]+\s*=\s*)?((?:(?:\$\(|@\(|\()\s*)*)(?=&\s*|[^\s"'$(@&])/)
+    let invocation = statement.slice(prefix?.[0].length ?? 0)
+    const groups = prefix?.[1].match(/\(/g)?.length ?? 0
+    for (let i = 0; i < groups; i++) invocation = invocation.replace(/\)\s*$/, '').trim()
+    const first = invocation.match(/^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|([^\s]+))/)
     const cmd = slash(first?.[1] ?? first?.[2] ?? first?.[3] ?? '').split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
     if (['copy-item', 'cpi', 'cp', 'copy', 'robocopy', 'xcopy'].includes(cmd)) return true
     if (/^\s*(?:shutil\.copy\w*|copyfile)\s*\(/.test(statement)) return true
     // These wrappers execute their code argument. Unsupported copy code is held, not run.
-    const code = statement.match(/(?:^|\s)(?:-c|-command|\/c)\s+(?:"([^"]*)"|'([^']*)'|(.+))$/i)
+    const code = invocation.match(/(?:^|\s)(?:-c|-command|\/c)\s+(?:"([^"]*)"|'([^']*)'|(.+))$/i)
+      ?? (/^(?:bash|sh)$/.test(cmd)
+        ? invocation.match(/(?:^|\s)-[A-Za-z]*c[A-Za-z]*\s+(?:"([^"]*)"|'([^']*)'|(.+))$/)
+        : null)
     if (!code) return false
     const body = code[1] ?? code[2] ?? code[3] ?? ''
     if (/^python[\d.]*$|^pythonw$/.test(cmd)) return /\b(?:shutil\.copy\w*|copyfile)\s*\(/.test(body)
