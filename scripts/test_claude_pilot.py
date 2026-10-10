@@ -116,6 +116,12 @@ class PolicyTests(unittest.TestCase):
                         self.assertNotIn('anthropic_api_key',step['with'])
                         self.assertFalse(step['with']['show_full_output'])
             self.assertNotIn('write', data['jobs'][model_job]['permissions'].values())
+            if model_job == 'propose':
+                self.assertEqual(data['jobs']['draft']['needs'], ['propose', 'test'])
+                publish_env = data['jobs']['draft']['steps'][-1]['env']
+                for name in ['meta', 'report']:
+                    self.assertEqual(data['jobs']['propose']['outputs'][name+'_sha256'], '${{ steps.capture.outputs.'+name+'_sha256 }}')
+                    self.assertEqual(publish_env['PRODUCER_'+name.upper()+'_SHA256'], '${{ needs.propose.outputs.'+name+'_sha256 }}')
 
     def test_issue_edit_refused_before_publish(self):
         meta={'mode':'implement','number':1,'sha':'a'*40,'default':'main','actor':'writer','run_id':'7','scope':'fleet','issue_updated_at':'old'}
@@ -140,6 +146,20 @@ class PolicyTests(unittest.TestCase):
 
 
 class RegressionTests(unittest.TestCase):
+    def producer_environment(self):
+        return {'PRODUCER_'+name.upper()+'_SHA256':p.hashlib.sha256(pathlib.Path('.pilot/'+name+'.json').read_bytes()).hexdigest() for name in ['meta','report']}
+
+    def test_capture_authenticates_producer_before_candidate_execution(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);self.fixture(root);previous=os.getcwd()
+            try:
+                os.chdir(root)
+                proposal=pathlib.Path('.pilot/report.json').read_text()
+                with patch.dict(os.environ,{'STRUCTURED_OUTPUT':proposal}),patch.object(p,'output') as outputs:
+                    p.capture('implement')
+                    self.assertEqual(dict(call.args for call in outputs.call_args_list), {name+'_sha256':digest for name,digest in [('meta',self.producer_environment()['PRODUCER_META_SHA256']),('report',self.producer_environment()['PRODUCER_REPORT_SHA256'])]})
+            finally: os.chdir(previous)
+
     def prepare_review(self, comparison=None):
         head, base = 'a'*40, 'c'*40
         pr={'state':'open','changed_files':1,'head':{'sha':head,'repo':{'full_name':p.REPO}},'base':{'sha':base,'ref':'main','repo':{'full_name':p.REPO}}}
@@ -215,7 +235,7 @@ class RegressionTests(unittest.TestCase):
                 self.assertRegex(p.load('.pilot/tested.json')['source_sha256'],r'^[0-9a-f]{64}$')
                 pathlib.Path('plugins/fleet/.claude-plugin/plugin.json').write_text(json.dumps({'name':'fleet','version':'1.0.0'}))
                 pathlib.Path('outside.ts').write_text('publish tree differs')
-                with patch.object(p,'verify_meta'),patch.object(p,'repo_api') as writes:
+                with patch.dict(os.environ,self.producer_environment()),patch.object(p,'verify_meta'),patch.object(p,'repo_api') as writes:
                     with self.assertRaisesRegex(ValueError,'source'): p.publish()
                     writes.assert_not_called()
             finally: os.chdir(previous)
@@ -226,7 +246,7 @@ class RegressionTests(unittest.TestCase):
             try:
                 os.chdir(root)
                 p.dump('.pilot/tested.json',{'base':base,'report_sha256':p.hashlib.sha256(pathlib.Path('.pilot/report.json').read_bytes()).hexdigest(),'tests':'old unbound receipt'})
-                with patch.object(p,'verify_meta'),patch.object(p,'repo_api') as writes:
+                with patch.dict(os.environ,self.producer_environment()),patch.object(p,'verify_meta'),patch.object(p,'repo_api') as writes:
                     with self.assertRaisesRegex(ValueError,'source'): p.publish()
                     writes.assert_not_called()
             finally: os.chdir(previous)
@@ -247,11 +267,43 @@ class RegressionTests(unittest.TestCase):
                     if path.startswith('git/commits/'): return {'tree':{'sha':'b'*40}}
                     if path=='pulls': return {'html_url':'https://example.invalid/draft'}
                     return {'sha':'c'*40}
-                with patch.object(p,'verify_meta'),patch.object(p,'repo_api',side_effect=api): p.publish()
+                with patch.dict(os.environ,self.producer_environment()),patch.object(p,'verify_meta'),patch.object(p,'repo_api',side_effect=api): p.publish()
                 draft=next(data for path,data in calls if path=='pulls')
                 self.assertTrue(draft['draft']);self.assertIn(attestation,draft['body'])
                 content=[data['content'] for path,data in calls if path=='git/blobs']
                 self.assertIn('export const tested = true;\n',content)
+            finally: os.chdir(previous)
+
+    def test_background_replacement_of_report_and_matching_receipt_refused(self):
+        for artifact in ['report','meta']:
+            with self.subTest(artifact=artifact),tempfile.TemporaryDirectory() as d:
+                root=pathlib.Path(d);self.fixture(root);previous=os.getcwd()
+                try:
+                    os.chdir(root)
+                    trusted=self.producer_environment()
+                    real_run=p.subprocess.run
+                    with patch.object(p.subprocess,'run',side_effect=lambda args,**kwargs: None if args[0]=='claude' else real_run(args,**kwargs)): p.test_proposal()
+                    data=p.load('.pilot/'+artifact+'.json')
+                    if artifact=='report': data['changes'][1]['content']='export const neverTested = true;\n'
+                    else: data['scope']='session-inbox'
+                    p.dump('.pilot/'+artifact+'.json',data)
+                    receipt=p.load('.pilot/tested.json')
+                    receipt['report_sha256']=p.hashlib.sha256(pathlib.Path('.pilot/report.json').read_bytes()).hexdigest()
+                    receipt['source_sha256']='f'*64
+                    p.dump('.pilot/tested.json',receipt)
+                    with patch.dict(os.environ,trusted),patch.object(p,'verify_meta') as verify,patch.object(p,'repo_api') as writes:
+                        with self.assertRaisesRegex(ValueError,'trusted producer'): p.publish()
+                        verify.assert_not_called();writes.assert_not_called()
+                finally: os.chdir(previous)
+
+    def test_missing_producer_attestation_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);self.fixture(root);previous=os.getcwd()
+            try:
+                os.chdir(root)
+                with patch.dict(os.environ,{'PRODUCER_META_SHA256':'','PRODUCER_REPORT_SHA256':''}),patch.object(p,'repo_api') as writes:
+                    with self.assertRaisesRegex(ValueError,'trusted producer'): p.publish()
+                    writes.assert_not_called()
             finally: os.chdir(previous)
 
     def test_review_base_changed_even_with_same_head_refused(self):

@@ -28,6 +28,9 @@ jobs:
     if: vars.CLAUDE_IMPLEMENT_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      meta_sha256: ${{ steps.capture.outputs.meta_sha256 }}
+      report_sha256: ${{ steps.capture.outputs.report_sha256 }}
     permissions:
       contents: read
       issues: read
@@ -62,11 +65,12 @@ jobs:
             --strict-mcp-config --mcp-config '{"mcpServers":{}}'
             --max-turns 1 --disable-slash-commands --no-session-persistence
             --json-schema '{"type":"object","additionalProperties":false,"required":["summary","changes"],"properties":{"summary":{"type":"string","maxLength":1000},"changes":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string","maxLength":40000}}}}}}'
-      - name: Validate bounded proposal
+      - id: capture
+        name: Validate bounded proposal and authenticate producer artifacts
         env:
           STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
         run: python3 scripts/claude_pilot.py capture-implement
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # Node 24
         with:
           name: proposal-${{ github.run_id }}
           path: .pilot/*.json
@@ -84,7 +88,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: proposal-${{ github.run_id }}
           path: .pilot
@@ -92,7 +96,7 @@ jobs:
         run: npm install -g @anthropic-ai/claude-code@2.1.293
       - name: Apply restricted files and validate/test selected plugin without tokens
         run: python3 scripts/claude_pilot.py test
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
           name: tested-${{ github.run_id }}
           path: .pilot/*.json
@@ -100,7 +104,7 @@ jobs:
           retention-days: 1
           if-no-files-found: error
   draft:
-    needs: test
+    needs: [propose, test]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -112,11 +116,13 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3
         with:
           name: tested-${{ github.run_id }}
           path: .pilot
       - name: Recheck base and permissions; isolated ref and draft PR via trusted API writer
         env:
           GH_TOKEN: ${{ github.token }}
+          PRODUCER_META_SHA256: ${{ needs.propose.outputs.meta_sha256 }}
+          PRODUCER_REPORT_SHA256: ${{ needs.propose.outputs.report_sha256 }}
         run: python3 scripts/claude_pilot.py publish

@@ -173,6 +173,17 @@ def capture(mode):
     if mode == 'review': review_comment(report, meta['sha'])
     else: validate_proposal(report, meta['scope'])
     dump('.pilot/report.json',report)
+    if mode == 'implement':
+        # These job outputs are produced before candidate code executes and cannot
+        # be replaced by a background process in the separate test job.
+        for name in ['meta', 'report']:
+            output(name+'_sha256', hashlib.sha256(Path('.pilot/'+name+'.json').read_bytes()).hexdigest())
+
+def verify_producer_artifacts():
+    for name in ['meta', 'report']:
+        expected = os.environ.get('PRODUCER_'+name.upper()+'_SHA256', '')
+        if not re.fullmatch(r'[0-9a-f]{64}', expected) or hashlib.sha256(Path('.pilot/'+name+'.json').read_bytes()).hexdigest() != expected:
+            raise ValueError('artifact differs from trusted producer: '+name)
 
 def verify_meta(meta, mode):
     if meta['mode'] != mode or str(meta['number']) != os.environ['TARGET_NUMBER'] or meta['sha'] != os.environ['EXPECTED_SHA'] or meta['run_id'] != os.environ['GITHUB_RUN_ID'] or meta['actor'] != os.environ['GITHUB_ACTOR']:
@@ -249,6 +260,7 @@ def post_review():
     repo_api(f'pulls/{meta["number"]}/reviews',{'commit_id':meta['sha'],'body':body,'event':'COMMENT'})
 
 def publish():
+    verify_producer_artifacts()
     meta=load('.pilot/meta.json'); verify_meta(meta,'implement')
     tested=load('.pilot/tested.json')
     if tested['base']!=meta['sha'] or tested['report_sha256']!=hashlib.sha256(Path('.pilot/report.json').read_bytes()).hexdigest(): raise ValueError('tested proposal mismatch')
@@ -268,7 +280,7 @@ def publish():
     branch=f'claude-pilot/issue-{meta["number"]}-run-{meta["run_id"]}'
     repo_api('git/refs',{'ref':'refs/heads/'+branch,'sha':commit['sha']})
     print('Created isolated branch:',branch,'HEAD:',commit['sha'],'(preserve this ref if draft creation fails)')
-    body=f'Implements #{meta["number"]} from immutable base `{meta["sha"]}`.\n\nSelected plugin: `{meta["scope"]}`. Tests: {tested["tests"]}.\nTested proposal SHA256: `{tested["report_sha256"]}`.\nTested source SHA256: `{tested["source_sha256"]}`.\n\nDraft only. Dispatch Claude reviewer with this PR number and HEAD `{commit["sha"]}`, then require human independent review and CI. No automatic merge.\n\nGITHUB_TOKEN-created PRs do not trigger normal pull_request workflows; run required CI separately before considering merge.'
+    body=f'Implements #{meta["number"]} from immutable base `{meta["sha"]}`.\n\nSelected plugin: `{meta["scope"]}`. Tests: {tested["tests"]}.\nTested proposal SHA256: `{tested["report_sha256"]}`.\nTested source SHA256: `{tested["source_sha256"]}`.\n\nDraft only. Dispatch Claude reviewer with this PR number and HEAD `{commit["sha"]}`, then require human independent review and CI. No automatic merge.\n\nGITHUB_TOKEN-created PRs queue configured pull_request workflows awaiting human approval. A repository writer must select Approve workflows to run, then verify required CI on this exact HEAD before considering merge.'
     pr=repo_api('pulls',{'title':f'Draft: issue #{meta["number"]} ({meta["scope"]})','head':branch,'base':meta['default'],'body':body,'draft':True})
     print('Draft PR:',pr['html_url'],'HEAD:',commit['sha'])
 
