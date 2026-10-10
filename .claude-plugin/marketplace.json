@@ -29,6 +29,20 @@
       "category": "productivity"
     },
     {
+      "name": "ga-chatbot",
+      "version": "0.2.17",
+      "description": "Guitar Alchemist in panes: the chatbot (local GaChatbot.Api), ASCII chord diagrams from GA's offline voicing index, and the OPTIC-K ladder of any voicing, checked against GA's set theory",
+      "source": "./plugins/ga-chatbot",
+      "category": "development"
+    },
+    {
+      "name": "observatory-guard",
+      "version": "0.2.0",
+      "description": "Keeps the Observatory prototype and its DLSS copy runnable while sessions edit them: Godot --check-only on changed scripts, asks before a command opens a window over the author's demo or stops it or their ComfyUI; adds a /godot pane",
+      "source": "./plugins/observatory-guard",
+      "category": "development"
+    },
+    {
       "name": "ga",
       "version": "1.0.0",
       "description": "Guitar Alchemist DSL: music theory tools, chord analysis, tab search and GA Language commands. It runs GaMcpServer from the current directory, so it works only in a session started inside a ga checkout",
