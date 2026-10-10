@@ -35,7 +35,13 @@ function engine(on: On, registry?: string, list = LIST, refuse = ''): World {
   let now = Date.UTC(2026, 9, 4, 18, 0)
   on('clock.now', () => ({ value: (now += 1000) }))
   on('env.get', (_$, e) => ({ value: e.name === 'USERPROFILE' ? HOME : undefined }))
-  const key = (path: string) => path.replace(/\\/g, '/') // the engine may hand the path with either separator
+  // The engine may hand the path with either separator, and resolves it first: off Windows,
+  // C:/Users/tester is not absolute, so it arrives under the working directory.
+  const key = (path: string) => {
+    const p = path.replace(/\\/g, '/')
+    const i = p.indexOf('C:/Users/tester/')
+    return i >= 0 ? p.slice(i) : p
+  }
   on('fs.exists', (_$, e) => ({ value: world.files.has(key(e.path)) }))
   on('fs.read', (_$, e) => {
     const text = world.files.get(key(e.path))
