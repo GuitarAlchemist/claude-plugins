@@ -21,10 +21,10 @@ const FORK = 'C:/tmp/godot-nvidia-dlss/godot/bin/godot.windows.editor.x86_64.exe
 
 describe('paths', () => {
   test('a live project is found whatever the slashes and case', async () => {
-    expect(rootOf('C:\\tmp\\Observatory-Prototype-v1\\scripts\\observatory.gd')).toBe('C:/tmp/observatory-prototype-v1')
-    expect(rootOf('C:/tmp/observatory-dlss/artpass/dlss/dlss_play.gd')).toBe('C:/tmp/observatory-dlss')
-    expect(rootOf('C:/tmp/observatory-web-build-17/scripts/observatory.gd')).toBeUndefined()
-    expect(rootOf('C:/tmp/observatory-prototype-v1.bak/scripts/a.gd')).toBeUndefined()
+    expect(rootOf('C:\\tmp\\Observatory-Prototype-v1\\scripts\\observatory.gd', ['C:/tmp/observatory-prototype-v1', 'C:/tmp/observatory-dlss'])).toBe('C:/tmp/observatory-prototype-v1')
+    expect(rootOf('C:/tmp/observatory-dlss/artpass/dlss/dlss_play.gd', ['C:/tmp/observatory-prototype-v1', 'C:/tmp/observatory-dlss'])).toBe('C:/tmp/observatory-dlss')
+    expect(rootOf('C:/tmp/observatory-web-build-17/scripts/observatory.gd', ['C:/tmp/observatory-prototype-v1', 'C:/tmp/observatory-dlss'])).toBeUndefined()
+    expect(rootOf('C:/tmp/observatory-prototype-v1.bak/scripts/a.gd', ['C:/tmp/observatory-prototype-v1', 'C:/tmp/observatory-dlss'])).toBeUndefined()
   })
 
   test('res paths', async () => {
@@ -85,7 +85,7 @@ describe('copies', () => {
   test('into the DLSS copy', async () => {
     expect(copiesIntoDlss('Copy-Item C:/tmp/observatory-prototype-v1/scripts/observatory.gd C:/tmp/observatory-dlss/scripts/observatory.gd')).toBe(true)
     expect(copiesIntoDlss("shutil.copy2(src, 'C:/tmp/observatory-dlss/scripts/seldon_statue.gd')")).toBe(true)
-    expect(copiesIntoDlss('Copy-Item a.png C:/tmp/observatory-prototype-v1/renders/')).toBe(false)
+    expect(copiesIntoDlss('Copy-Item a.png C:/tmp/observatory-prototype-v1/renders/')).toBe(true)
     expect(copiesIntoDlss('Get-Content C:/tmp/observatory-dlss/override.cfg')).toBe(false)
   })
 
@@ -210,5 +210,19 @@ describe('window launches without --path', () => {
     expect(opensGodotWindow('godot.exe --check-only --script res://probe.gd')).toBe(false)
     expect(opensGodotWindow('godot.exe --import')).toBe(false)
     expect(opensGodotWindow('godot.exe --export-release Windows out.exe')).toBe(false)
+  })
+})
+
+describe('configured project and executable identities', () => {
+  test('configured executable names are recognized as window launches', async () => {
+    expect(opensGodotWindow("& 'D:/tools/fork.exe' --editor", ['C:/tools/stock.exe', 'D:/tools/fork.exe'])).toBe(true)
+    expect(opensGodotWindow("& 'D:/tools/fork.exe' --headless", ['C:/tools/stock.exe', 'D:/tools/fork.exe'])).toBe(false)
+  })
+  test('the configured protected project is a demo even with a different name', async () => {
+    expect(classify({ pid: 1, ppid: 0, cmd: 'D:/tools/fork.exe --path D:/demo-copy', title: '', started: '10:00' }, ['C:/prototype', 'D:/demo-copy'])).toBe('demo')
+  })
+  test('fixed fps is refused for the configured fork executable', async () => {
+    expect(forkWithFixedFps("& 'D:/tools/fork.exe' --fixed-fps 60", 'D:/tools/fork.exe')).toBe(true)
+    expect(forkWithFixedFps("& 'C:/tools/stock.exe' --fixed-fps 60", 'D:/tools/fork.exe')).toBe(false)
   })
 })

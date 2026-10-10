@@ -20,7 +20,7 @@ const SESSION_COMFY = JSON.stringify({
 
 function shell(on: Parameters<Parameters<typeof test>[1]>[1], comfy: string, answer: string) {
   on('session.cwd', () => ({ value: 'C:/Users/spare/source/repos/learn' }))
-  on('env.get', () => ({ value: undefined }))
+  on('env.get', ($, e) => ({ value: e.name === 'OBSERVATORY_GUARD_ROOTS' ? 'C:/tmp/observatory-prototype-v1;C:/tmp/observatory-dlss' : 'C:/tools/stock.exe;D:/tools/fork.exe' }))
   on('fs.list', () => ({ deny: 'no such folder in a test' }))
   on('ui.toast', () => ({ value: undefined }))
   on('process.run', ($, e) => ({
@@ -65,7 +65,7 @@ function copyFixture(on: Parameters<Parameters<typeof test>[1]>[1], sourceBroken
   let ran = false
   const checked: string[] = []
   on('session.cwd', () => ({ value: cwd }))
-  on('env.get', () => ({ value: undefined }))
+  on('env.get', ($, e) => ({ value: e.name === 'OBSERVATORY_GUARD_ROOTS' ? 'C:/tmp/observatory-prototype-v1;C:/tmp/observatory-dlss' : 'C:/tools/stock.exe;D:/tools/fork.exe' }))
   on('clock.now', () => ({ value: 1791600000000 }))
   on('ui.toast', () => ({ value: undefined }))
   on('fs.exists', ($, e) => ({ value: !noGodot || !String(e.path).endsWith('.exe') }))
@@ -152,7 +152,7 @@ test('more than twelve copy sources are refused rather than partially checked', 
 test('Godot without --path asks before opening over the running demo', async ($, on) => {
   let ran = false
   on('session.cwd', () => ({ value: 'C:/work' }))
-  on('env.get', () => ({ value: undefined }))
+  on('env.get', ($, e) => ({ value: e.name === 'OBSERVATORY_GUARD_ROOTS' ? 'C:/tmp/observatory-prototype-v1;C:/tmp/observatory-dlss' : 'C:/tools/stock.exe;D:/tools/fork.exe' }))
   on('fs.list', () => ({ value: [] }))
   on('ui.toast', () => ({ value: undefined }))
   on('process.run', () => ({ value: { exitCode: 0, stdout: JSON.stringify({ pid: 7, cmd: 'godot.exe --path C:/tmp/observatory-dlss', title: 'Observatory', started: '10:00' }), stderr: '' } }))
@@ -180,4 +180,79 @@ test('copying out of DLSS does not validate unrelated prototype scripts', async 
   expect(out.deny).toBeUndefined()
   expect(f.ran()).toBe(true)
   expect(f.checked.length).toBe(0)
+})
+
+function portableFixture(on: Parameters<Parameters<typeof test>[1]>[1], roots = 'C:/prototype;D:/demo-copy', binaries = 'C:/tools/stock.exe;D:/tools/fork.exe', missing = false) {
+  let ran = false
+  const checked: string[][] = []
+  on('session.cwd', () => ({ value: 'C:/work' }))
+  on('env.get', ($, e) => ({ value: e.name === 'OBSERVATORY_GUARD_ROOTS' ? roots : binaries }))
+  on('clock.now', () => ({ value: 1791600000000 }))
+  on('fs.list', () => ({ value: [] }))
+  on('fs.exists', ($, e) => ({ value: !(missing && String(e.path).endsWith('.exe')) }))
+  on('fs.read', () => ({ value: '' }))
+  on('ui.toast', () => ({ value: undefined }))
+  on('process.run', ($, e) => { checked.push([...e.argv]); return { value: { exitCode: 1, stdout: '', stderr: 'SCRIPT ERROR: Parse Error: broken' } } })
+  on('tool.call', () => { ran = true; return { result: 'ran' } })
+  return { checked, ran: () => ran }
+}
+
+test('configured renamed protected project validates alternate copy source', async ($, on) => {
+  const f = portableFixture(on)
+  const out = await $.tool.call({ tool: 'PowerShell', command: 'Copy-Item C:/other/scripts/broken.gd D:/demo-copy/scripts/broken.gd' })
+  expect(String(out.deny)).toMatch(/copy-broken/)
+  expect(f.ran()).toBe(false)
+  expect(f.checked[0]?.[0]).toBe('C:/tools/stock.exe')
+})
+
+test('dot segments cannot bypass protected destination checks', async ($, on) => {
+  const f = portableFixture(on, 'C:/prototype;C:/tmp/observatory-dlss')
+  const out = await $.tool.call({ tool: 'Bash', command: 'cp C:/other/scripts/broken.gd C:/tmp/./observatory-dlss/scripts/broken.gd' })
+  expect(String(out.deny)).toMatch(/copy-broken|copy-unverified/)
+  expect(f.ran()).toBe(false)
+})
+
+test('configured copy checker is selected by project identity, not basename', async ($, on) => {
+  const f = portableFixture(on)
+  const out = await $.tool.call({ tool: 'Edit', file_path: 'D:/demo-copy/scripts/scene.gd', old_string: '', new_string: 'bad' })
+  expect((out.context ?? []).join('\n')).toMatch(/no longer parses/)
+  expect(f.checked[0]?.[0]).toBe('D:/tools/fork.exe')
+})
+
+test('missing configured checker after an edit produces an explicit unchecked warning', async ($, on) => {
+  const f = portableFixture(on, undefined, undefined, true)
+  const out = await $.tool.call({ tool: 'Write', file_path: 'D:/demo-copy/scripts/scene.gd', content: 'bad' })
+  expect((out.context ?? []).join('\n')).toMatch(/check-unavailable.*Godot/)
+  expect(f.checked.length).toBe(0)
+})
+
+test('malformed configuration refuses copy without falling back to host paths', async ($, on) => {
+  const f = portableFixture(on, 'relative;D:/demo-copy')
+  const out = await $.tool.call({ tool: 'PowerShell', command: 'Copy-Item C:/other/scripts/broken.gd D:/demo-copy/scripts/broken.gd' })
+  expect(String(out.deny)).toMatch(/config-unavailable/)
+  expect(f.checked.length).toBe(0)
+  expect(f.ran()).toBe(false)
+})
+
+test('missing configuration is reported after edit and does not read host defaults', async ($, on) => {
+  const f = portableFixture(on, '', '')
+  const out = await $.tool.call({ tool: 'Edit', file_path: 'C:/prototype/scripts/scene.gd', old_string: '', new_string: 'bad' })
+  expect((out.context ?? []).join('\n')).toMatch(/check-unavailable.*OBSERVATORY_GUARD_ROOTS/)
+  expect(f.checked.length).toBe(0)
+})
+
+test('malformed executable configuration never falls back to an installed Godot', async ($, on) => {
+  const f = portableFixture(on, undefined, 'relative.exe;D:/tools/fork.exe')
+  const out = await $.tool.call({ tool: 'PowerShell', command: 'Copy-Item C:/other/scripts/broken.gd D:/demo-copy/scripts/broken.gd' })
+  expect(String(out.deny)).toMatch(/config-unavailable/)
+  expect(f.ran()).toBe(false)
+  expect(f.checked.length).toBe(0)
+})
+
+test('overlapping configured projects are refused rather than choosing a checker ambiguously', async ($, on) => {
+  const f = portableFixture(on, 'C:/prototype;C:/prototype/demo-copy')
+  const out = await $.tool.call({ tool: 'PowerShell', command: 'Copy-Item C:/other/scripts/broken.gd C:/prototype/demo-copy/scripts/broken.gd' })
+  expect(String(out.deny)).toMatch(/config-unavailable/)
+  expect(f.checked.length).toBe(0)
+  expect(f.ran()).toBe(false)
 })

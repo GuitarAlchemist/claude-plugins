@@ -37,7 +37,7 @@
     },
     {
       "name": "observatory-guard",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "description": "Keeps the Observatory prototype and its DLSS copy runnable while sessions edit them: Godot --check-only on changed scripts, asks before a command opens a window over the author's demo or stops it or their ComfyUI; adds a /godot pane",
       "source": "./plugins/observatory-guard",
       "category": "development"

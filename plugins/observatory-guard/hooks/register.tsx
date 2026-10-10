@@ -7,6 +7,7 @@ import {
   COMFY_SCRIPT,
   comfyFrom,
   copiesIntoDlss,
+  configFrom,
   dlssCopySources,
   forkWithFixedFps,
   godotFor,
@@ -16,11 +17,10 @@ import {
   parseProcs,
   PROCS_SCRIPT,
   rootOf,
-  rootsFrom,
+  normalizePath,
   scriptPaths,
   shortCmd,
   slash,
-  STOCK_GODOT,
   stopTargets,
   toRes,
   WATCHED,
@@ -52,13 +52,13 @@ function errText(err: unknown): string {
   return String(err instanceof Error ? err.message : err).slice(0, 160)
 }
 
-// The prototype and its DLSS copy, or a throwaway pair named by OBSERVATORY_GUARD_ROOTS for a test.
+// Roots and corresponding binaries are configured as two semicolon-separated absolute paths.
+async function liveConfig($: EngineInterface) {
+  return configFrom(await $.env.get('OBSERVATORY_GUARD_ROOTS'), await $.env.get('OBSERVATORY_GUARD_GODOT'))
+}
+
 async function liveRoots($: EngineInterface): Promise<readonly string[]> {
-  try {
-    return rootsFrom(await $.env.get('OBSERVATORY_GUARD_ROOTS'))
-  } catch {
-    return rootsFrom(undefined)
-  }
+  return (await liveConfig($)).roots
 }
 
 // ---- Checking a script: `--check-only` with the Godot that runs its project ----
@@ -66,36 +66,37 @@ async function liveRoots($: EngineInterface): Promise<readonly string[]> {
 type Check = { ok: boolean; errors: string[]; skipped?: string }
 
 async function checkScript($: EngineInterface, root: string, path: string): Promise<Check> {
-  let exe = godotFor(root)
-  if (!(await $.fs.exists(exe))) exe = STOCK_GODOT
-  if (!(await $.fs.exists(exe))) return { ok: true, errors: [], skipped: 'no Godot executable found' }
-  if (!(await $.fs.exists(`${root}/project.godot`))) return { ok: true, errors: [], skipped: 'no project.godot' }
-  const r = await $.process.run([exe, '--headless', '--path', root, '--check-only', '--script', toRes(root, path)], {
-    timeoutMs: 120_000,
-  })
-  const errors = parseErrors(`${r.stdout}\n${r.stderr}`)
-  const ok = r.exitCode === 0 && errors.length === 0
-  const result: Check = { ok, errors: ok ? [] : errors.length ? errors : [`Godot exited ${r.exitCode}`] }
+  const exe = godotFor(root, await liveConfig($))
+  let result: Check
+  if (!(await $.fs.exists(exe))) result = { ok: false, errors: [], skipped: `configured Godot executable unavailable: ${exe}` }
+  else if (!(await $.fs.exists(`${root}/project.godot`))) result = { ok: false, errors: [], skipped: `project.godot unavailable in ${root}` }
+  else {
+    const r = await $.process.run([exe, '--headless', '--path', root, '--check-only', '--script', toRes(root, path)], { timeoutMs: 120_000 })
+    const errors = parseErrors(`${r.stdout}\n${r.stderr}`)
+    const ok = r.exitCode === 0 && errors.length === 0
+    result = { ok, errors: ok ? [] : errors.length ? errors : [`Godot exited ${r.exitCode}`] }
+  }
   const row: ObservatoryGuardCheck = {
     at: await stamp($),
-    root: root.split('/').pop() ?? root,
+    root,
     file: path.slice(root.length + 1),
-    ok,
-    error: result.errors[0] ?? '',
+    ok: result.ok,
+    error: result.skipped ?? result.errors[0] ?? '',
   }
   await update($, checksAtom, rows => [row, ...rows.filter(c => !(c.root === row.root && c.file === row.file))].slice(0, 60))
   return result
 }
 
 function brokenNote(root: string, path: string, errors: string[], how: string): string {
-  const copy = root.toLowerCase().endsWith('observatory-dlss')
   return [
     `observatory-guard: ${path} no longer parses (${how}; Godot --check-only):`,
     ...errors.map(l => `  ${l}`),
-    copy
-      ? 'This is the native DLSS copy the author launches with observatory-dlss.cmd: put back a version that parses now.'
-      : 'The author may be running this project right now, and a scene script that fails to load shows them an empty void. Fix it before anything else, and do not copy it to C:/tmp/observatory-dlss until it passes there too.',
+    `Fix this project (${root}) before continuing or copying it into the configured protected project.`,
   ].join('\n')
+}
+
+function unavailableNote(path: string, why: string): string {
+  return `observatory-guard: check-unavailable for ${path}: ${why}. This script is unchecked, not verified runnable.`
 }
 
 // ---- After a shell command: the watched scripts it changed must still parse ----
@@ -132,7 +133,7 @@ async function changedScriptNotes($: EngineInterface, before: Snapshot): Promise
     if (!root) continue
     try {
       const c = await checkScript($, root, path)
-      if (!c.ok) notes.push(brokenNote(root, path, c.errors, 'changed by this command'))
+      if (!c.ok) notes.push(c.skipped ? unavailableNote(path, c.skipped) : brokenNote(root, path, c.errors, 'changed by this command'))
     } catch (err) {
       notes.push(`observatory-guard: could not check ${path} (${errText(err)}).`)
     }
@@ -148,7 +149,7 @@ async function commandText($: EngineInterface, command: string): Promise<string>
   const parts = [command]
   let cwd = ''
   try {
-    cwd = slash(await $.session.cwd())
+    cwd = normalizePath(await $.session.cwd()) ?? ''
   } catch {
     // no cwd: absolute script paths only
   }
@@ -172,9 +173,10 @@ async function listProcs($: EngineInterface): Promise<ObservatoryGuardProc[]> {
     timeoutMs: 20_000,
   })
   if (r.exitCode !== 0) throw new Error((r.stderr.trim().split('\n')[0] ?? 'process listing failed').slice(0, 120))
+  const roots = await liveRoots($)
   return parseProcs(r.stdout).map(p => ({
     pid: p.pid,
-    kind: classify(p),
+    kind: classify(p, roots),
     title: p.title,
     started: p.started,
     cmd: shortCmd(p.cmd),
@@ -241,9 +243,10 @@ function refusal(rule: string, why: string, answer: string | undefined): string 
 async function beforeShell($: EngineInterface, command: string): Promise<string | undefined> {
   const text = await commandText($, command)
 
-  const [, copy] = await liveRoots($)
+  const config = await liveConfig($)
+  const [, copy] = config.roots
   let cwd = ''
-  try { cwd = slash(await $.session.cwd()) } catch { /* unresolved relative paths fail closed */ }
+  try { cwd = normalizePath(await $.session.cwd()) ?? '' } catch { /* unresolved relative paths fail closed */ }
   const inCopy = !!copy && (cwd.toLowerCase() === copy.toLowerCase() || cwd.toLowerCase().startsWith(`${copy.toLowerCase()}/`))
   if (copiesIntoDlss(text) || (inCopy && /\b(?:Copy-Item|cpi|cp|copy|robocopy|xcopy|shutil\.copy\w*|copyfile)\b/i.test(text))) {
     try {
@@ -265,7 +268,7 @@ async function beforeShell($: EngineInterface, command: string): Promise<string 
     }
   }
 
-  if (forkWithFixedFps(text)) {
+  if (forkWithFixedFps(text, config.godot[1])) {
     $.ui.toast('observatory-guard : fork DLSS avec --fixed-fps refusé', { timeoutMs: 8000 })
     return [
       'observatory-guard: refused (fork-fixed-fps). The command runs the DLSS fork with --fixed-fps. On 2026-10-03 that drew',
@@ -276,7 +279,7 @@ async function beforeShell($: EngineInterface, command: string): Promise<string 
     ].join('\n')
   }
 
-  const window = opensGodotWindow(text)
+  const window = opensGodotWindow(text, config.godot)
   const stop = stopTargets(text)
   if (!window && !stop) return undefined
 
@@ -434,32 +437,34 @@ export const register: Register = on => {
   on('tool.call', { tool: 'Write' }, async ($, e, next) => {
     const r = await next(e)
     if (r.deny !== undefined || r.isError) return r
-    const path = typeof e.file_path === 'string' ? slash(e.file_path) : ''
-    const root = rootOf(path, await liveRoots($))
-    if (!root || !isScript(path)) return r
+    const path = typeof e.file_path === 'string' ? normalizePath(e.file_path) ?? '' : ''
+    if (!isScript(path)) return r
     try {
+      const root = rootOf(path, await liveRoots($))
+      if (!root) return r
       const c = await checkScript($, root, path)
       if (c.ok) return r
-      $.ui.toast(`observatory-guard : ${path.split('/').pop()} ne parse plus`, { timeoutMs: 8000 })
-      return { ...r, context: [...(r.context ?? []), brokenNote(root, path, c.errors, 'just written')] }
-    } catch {
-      return r
+      $.ui.toast(`observatory-guard : ${path.split('/').pop()} ${c.skipped ? 'verification indisponible' : 'ne parse plus'}`, { timeoutMs: 8000 })
+      return { ...r, context: [...(r.context ?? []), c.skipped ? unavailableNote(path, c.skipped) : brokenNote(root, path, c.errors, 'just written')] }
+    } catch (err) {
+      return { ...r, context: [...(r.context ?? []), unavailableNote(path, errText(err))] }
     }
   })
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
     const r = await next(e)
     if (r.deny !== undefined || r.isError) return r
-    const path = typeof e.file_path === 'string' ? slash(e.file_path) : ''
-    const root = rootOf(path, await liveRoots($))
-    if (!root || !isScript(path)) return r
+    const path = typeof e.file_path === 'string' ? normalizePath(e.file_path) ?? '' : ''
+    if (!isScript(path)) return r
     try {
+      const root = rootOf(path, await liveRoots($))
+      if (!root) return r
       const c = await checkScript($, root, path)
       if (c.ok) return r
-      $.ui.toast(`observatory-guard : ${path.split('/').pop()} ne parse plus`, { timeoutMs: 8000 })
-      return { ...r, context: [...(r.context ?? []), brokenNote(root, path, c.errors, 'just edited')] }
-    } catch {
-      return r
+      $.ui.toast(`observatory-guard : ${path.split('/').pop()} ${c.skipped ? 'verification indisponible' : 'ne parse plus'}`, { timeoutMs: 8000 })
+      return { ...r, context: [...(r.context ?? []), c.skipped ? unavailableNote(path, c.skipped) : brokenNote(root, path, c.errors, 'just edited')] }
+    } catch (err) {
+      return { ...r, context: [...(r.context ?? []), unavailableNote(path, errText(err))] }
     }
   })
 
@@ -469,7 +474,7 @@ export const register: Register = on => {
     try {
       deny = await beforeShell($, command)
     } catch {
-      deny = undefined // a guard that fails here only loses its question; the tool's own permission still applies
+      deny = 'observatory-guard: refused (config-unavailable). Configure two absolute roots and Godot binaries; the guard could not verify this command.'
     }
     if (deny) return { deny }
     const before = await snapshot($)
@@ -485,7 +490,7 @@ export const register: Register = on => {
     try {
       deny = await beforeShell($, command)
     } catch {
-      deny = undefined
+      deny = 'observatory-guard: refused (config-unavailable). Configure two absolute roots and Godot binaries; the guard could not verify this command.'
     }
     if (deny) return { deny }
     const before = await snapshot($)

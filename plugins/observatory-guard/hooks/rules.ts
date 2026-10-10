@@ -4,37 +4,63 @@
 // already follow by hand (the godot-rtx skill).
 // Pure text work only: everything that reaches the engine (`$`) lives in register.tsx.
 
-// The two projects the author runs, and the Godot that checks each one.
-export const ROOTS = ['C:/tmp/observatory-prototype-v1', 'C:/tmp/observatory-dlss'] as const
-export const STOCK_GODOT =
-  'C:/Users/spare/AppData/Local/Microsoft/WinGet/Packages/GodotEngine.GodotEngine_Microsoft.Winget.Source_8wekyb3d8bbwe/Godot_v4.6.1-stable_win64_console.exe'
-export const FORK_GODOT = 'C:/tmp/godot-nvidia-dlss/godot/bin/godot.windows.editor.x86_64.console.exe'
-// The folders whose scripts the author's runs load: the scene's, and the native demo's.
+// Configuration is explicit: no host-specific project or executable is selected implicitly.
 export const WATCHED = ['scripts', 'artpass/dlss'] as const
+export type GuardConfig = { roots: readonly [string, string]; godot: readonly [string, string] }
 
 export function slash(path: string): string {
   return path.replace(/\\/g, '/')
 }
 
-// The live project a path is in, spelled as in `roots`; undefined outside them.
-export function rootOf(path: string, roots: readonly string[] = ROOTS): string | undefined {
-  const p = slash(path).toLowerCase()
-  return roots.find(r => p.startsWith(`${r.toLowerCase()}/`))
+// Lexical normalization only. UNC/device paths, relative paths and traversal above the anchor
+// are unsupported; filesystem aliases/symlinks are not claimed to be resolved here.
+export function normalizePath(path: string): string | undefined {
+  const p = slash(path)
+  if (!p || /[\x00-\x1f]/.test(p) || p.startsWith('//')) return undefined
+  const anchor = p.match(/^[A-Za-z]:\//)?.[0] ?? (p.startsWith('/') ? '/' : '')
+  if (!anchor) return undefined
+  const parts: string[] = []
+  for (const part of p.slice(anchor.length).split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') { if (!parts.length) return undefined; parts.pop() }
+    else { if (part.includes(':')) return undefined; parts.push(part) }
+  }
+  return `${anchor}${parts.join('/')}`
 }
 
-// OBSERVATORY_GUARD_ROOTS ("<prototype>;<copy>") points the guard at a throwaway pair, to test it
-// without touching the projects the author runs.
-export function rootsFrom(value: string | undefined): readonly string[] {
-  const list = (value ?? '').split(';').map(s => slash(s.trim()).replace(/\/+$/, '')).filter(Boolean)
-  return list.length === 2 ? list : ROOTS
+export function rootOf(path: string, roots: readonly string[] = []): string | undefined {
+  const p = normalizePath(path)?.toLowerCase()
+  return p ? roots.find(r => p.startsWith(`${r.toLowerCase()}/`)) : undefined
 }
 
-export function godotFor(root: string): string {
-  return root.toLowerCase().endsWith('observatory-dlss') ? FORK_GODOT : STOCK_GODOT
+export function rootsFrom(value: string | undefined): readonly [string, string] {
+  const list = (value ?? '').split(';').map(s => normalizePath(s.trim()))
+  if (list.length !== 2 || list.some(p => !p || /^(?:[A-Za-z]:\/|\/)$/.test(p))) {
+    throw new Error('OBSERVATORY_GUARD_ROOTS requires two absolute project paths')
+  }
+  const [a, b] = list as [string, string]
+  if (a.toLowerCase() === b.toLowerCase() || rootOf(a, [b]) || rootOf(b, [a])) {
+    throw new Error('OBSERVATORY_GUARD_ROOTS projects must be distinct and non-overlapping')
+  }
+  return [a, b]
+}
+
+export function configFrom(roots: string | undefined, binaries: string | undefined): GuardConfig {
+  const projects = rootsFrom(roots)
+  const list = (binaries ?? '').split(';').map(s => normalizePath(s.trim()))
+  if (list.length !== 2 || list.some(p => !p || /^(?:[A-Za-z]:\/|\/)$/.test(p))) {
+    throw new Error('OBSERVATORY_GUARD_GODOT requires two absolute executable paths')
+  }
+  return { roots: projects, godot: list as [string, string] }
+}
+
+export function godotFor(root: string, config: GuardConfig): string {
+  // An alternate incoming source project uses the configured prototype checker.
+  return root.toLowerCase() === config.roots[1].toLowerCase() ? config.godot[1] : config.godot[0]
 }
 
 export function toRes(root: string, path: string): string {
-  return `res://${slash(path).slice(root.length + 1)}`
+  return `res://${normalizePath(path)?.slice(root.length + 1) ?? ''}`
 }
 
 export function isScript(path: string): boolean {
@@ -67,18 +93,19 @@ export function scriptPaths(command: string): string[] {
 
 // Judge each invocation, including a bare executable (Godot uses the current project or opens
 // its project manager). Assignments are not launches; headless flags apply only to that invocation.
-export function opensGodotWindow(text: string): boolean {
+export function opensGodotWindow(text: string, binaries: readonly string[] = []): boolean {
   const exe = /godot[^\s"'\\/]*\.exe/i
+  const namesGodot = (value: string) => exe.test(value) || binaries.some(b => slash(value).toLowerCase().includes(b.toLowerCase()))
   const vars = new Set<string>()
   for (const m of text.matchAll(/\$(\w+)\s*=\s*['"]([^'"\n]+)['"]/g)) {
-    if (exe.test(m[2] ?? '')) vars.add(m[1] ?? '')
+    if (namesGodot(m[2] ?? '')) vars.add(m[1] ?? '')
   }
   return text.split(/\r?\n|;|&&|\|\|/).some(statement => {
     if (/observatory-dlss\.cmd/i.test(statement)) return true
     if (/^\s*\$\w+\s*=\s*['"][^'"]+['"]\s*$/.test(statement)) return false
     const viaVariable = [...vars].some(v =>
       new RegExp(`(?:&\\s*|-(?:FilePath|f)\\s+)\\$${v}\\b`, 'i').test(statement))
-    if (!exe.test(statement) && !viaVariable) return false
+    if (!namesGodot(statement) && !viaVariable) return false
     if (/--(?:headless|help|version)\b/.test(statement)) return false
     return !/--check-only|--export-(?:release|debug|pack)|--import\b/.test(statement) ||
       /--resolution|--maximized|--fullscreen/.test(statement)
@@ -93,15 +120,16 @@ export function opensGodotWindow(text: string): boolean {
 // A command that means it says so with `fixed-fps-ok` (in a comment).
 const FORK_EXE = /godot-nvidia-dlss[\\/][^\s'"]*\.exe|godot\.windows\.(?:editor|template)[\w.]*\.exe/i
 
-export function forkWithFixedFps(text: string): boolean {
+export function forkWithFixedFps(text: string, fork?: string): boolean {
+  const isFork = (value: string) => FORK_EXE.test(value) || !!fork && slash(value).toLowerCase().includes(fork.toLowerCase())
   if (/fixed-fps-ok/i.test(text)) return false
   const vars = new Set<string>()
   for (const m of text.matchAll(/\$?\{?(\w+)\}?\s*=\s*["']?([^\n;"']+)/g)) {
-    if (FORK_EXE.test(m[2] ?? '')) vars.add((m[1] ?? '').toLowerCase())
+    if (isFork(m[2] ?? '')) vars.add((m[1] ?? '').toLowerCase())
   }
   return text.split(/\r?\n|;|&&|\|\|/).some(s => {
     if (!/--fixed-fps\b/.test(s)) return false
-    if (FORK_EXE.test(s)) return true
+    if (isFork(s)) return true
     return [...vars].some(v => new RegExp(`\\$\\{?${v}\\b`, 'i').test(s))
   })
 }
@@ -155,9 +183,9 @@ export const COMFY_SCRIPT = [
   '} | ConvertTo-Json -Compress',
 ].join('\n')
 
-// A copy into the native demo's project (Copy-Item, cp, copy, robocopy, xcopy, shutil.copy).
+// A copy candidate; its actual normalized destination is checked by dlssCopySources below.
 export function copiesIntoDlss(text: string): boolean {
-  return /(?:Copy-Item|\bcpi?\b|\bcopy\b|robocopy|xcopy|shutil\.copy\w*|copyfile)[^\n]*observatory-dlss/i.test(text)
+  return /\b(?:Copy-Item|cpi|cp|copy|robocopy|xcopy|shutil\.copy\w*|copyfile)\b/i.test(text)
 }
 
 // ---- Godot processes ----
@@ -167,13 +195,16 @@ export type ProcKind = 'demo' | 'editor' | 'probe' | 'headless' | 'other'
 
 // demo: what the author plays (the DLSS demo, a run from the editor, the project run bare); probe: a
 // session's --script run; editor: the editor or project manager.
-export function classify(p: GodotProc): ProcKind {
+export function classify(p: GodotProc, roots: readonly string[] = []): ProcKind {
   const cmd = p.cmd
   if (/--headless\b/.test(cmd)) return 'headless'
   if (/dlss_play\.gd/i.test(cmd)) return 'demo'
   if (/--remote-debug\b/.test(cmd)) return 'demo'
   if (/(?:^|\s)(?:-e|--editor|-p|--project-manager)(?:\s|$)/.test(cmd)) return 'editor'
   if (/--script\b/.test(cmd)) return 'probe'
+  const project = cmd.match(/--path(?:=|\s+)(?:"([^"]+)"|'([^']+)'|([^\s]+))/)
+  const path = normalizePath(project?.[1] ?? project?.[2] ?? project?.[3] ?? '')?.toLowerCase()
+  if (path && roots.some(root => root.toLowerCase() === path)) return 'demo'
   if (/observatory/i.test(cmd) || /observatory/i.test(p.title)) return 'demo'
   if (!/--path\b/.test(cmd)) return 'editor'
   return 'other'
@@ -217,8 +248,8 @@ export function dlssCopySources(text: string, cwd: string, copy: string): { sour
   const sources: string[] = []
   const resolve = (path: string) => {
     const p = slash(path)
-    if (/[\$`*?{}()[\],]|(?:^|\/)\.\.(?:\/|$)/.test(p)) return undefined
-    return /^[A-Za-z]:\//.test(p) || p.startsWith('/') ? p : cwd ? `${cwd}/${p.replace(/^\.\//, '')}` : undefined
+    if (/[\$`*?{}()[\],]/.test(p)) return undefined
+    return normalizePath(/^[A-Za-z]:\//.test(p) || p.startsWith('/') ? p : cwd ? `${cwd}/${p}` : '')
   }
   const statements = text.split(/\r?\n|;/).filter(s => copiesIntoDlss(s) || /^\s*(?:Copy-Item|cpi|cp|copy)\b/i.test(s))
   if (!statements.length) return { sources, error: 'no literal copy statement could be resolved' }
@@ -253,7 +284,8 @@ export function dlssCopySources(text: string, cwd: string, copy: string): { sour
     const src = source ? resolve(source) : undefined
     const dst = destination ? resolve(destination) : undefined
     if (!src || !dst) return { sources, error: 'copy paths must be literal and resolvable' }
-    const target = copy.toLowerCase()
+    const target = normalizePath(copy)?.toLowerCase()
+    if (!target) return { sources, error: 'protected project path is unavailable' }
     if (dst.toLowerCase() !== target && !dst.toLowerCase().startsWith(`${target}/`)) continue
     if (!isScript(src)) return { sources, error: 'only explicit single-script copies can be checked' }
     sources.push(src)
