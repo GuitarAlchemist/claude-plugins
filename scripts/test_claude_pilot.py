@@ -150,6 +150,37 @@ class RegressionTests(unittest.TestCase):
     def producer_environment(self):
         return {'PRODUCER_'+name.upper()+'_SHA256':p.hashlib.sha256(pathlib.Path('.pilot/'+name+'.json').read_bytes()).hexdigest() for name in ['meta','report']}
 
+    def test_documentation_issue_requires_and_applies_version_bump(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);base=self.fixture(root);previous=os.getcwd()
+            try:
+                os.chdir(root)
+                env={'GITHUB_REPOSITORY':p.REPO,'GITHUB_EVENT_NAME':'workflow_dispatch','GITHUB_REF':'refs/heads/main','GITHUB_ACTOR':'writer','TARGET_NUMBER':'1','EXPECTED_SHA':base,'GITHUB_RUN_ID':'7','PLUGIN_SCOPE':'fleet'}
+                responses={'':{'default_branch':'main'},'git/ref/heads/main':{'object':{'sha':base}},'issues/1':{'state':'open','title':'Add usage documentation','body':'Document the existing command.','user':{'login':'writer'},'updated_at':'now'}}
+                with patch.dict(os.environ,env),patch.object(p,'check_writer'),patch.object(p,'repo_api',side_effect=lambda key:responses[key]),patch.object(p,'output') as outputs:
+                    p.prepare('implement')
+                prompt=dict(call.args for call in outputs.call_args_list)['prompt']
+                instruction=prompt.split('\nImmutable target: ',1)[0]
+                self.assertIn('Bump the plugin manifest version for every plugin change, including documentation-only changes.',instruction)
+                proposal={'summary':'document usage','changes':[{'path':'plugins/fleet/README.md','content':'# Existing command\n'},{'path':'plugins/fleet/.claude-plugin/plugin.json','content':json.dumps({'name':'fleet','version':'1.0.1'})}]}
+                with patch.dict(os.environ,{'STRUCTURED_OUTPUT':json.dumps(proposal)}),patch.object(p,'output'):
+                    p.capture('implement')
+                p.apply_proposal()
+                self.assertEqual(pathlib.Path('plugins/fleet/README.md').read_text(),'# Existing command\n')
+                self.assertEqual(p.load('plugins/fleet/.claude-plugin/plugin.json')['version'],'1.0.1')
+                self.assertEqual(p.load('.claude-plugin/marketplace.json')['plugins'][0]['version'],'1.0.1')
+            finally: os.chdir(previous)
+
+    def test_documentation_proposal_without_version_bump_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=pathlib.Path(d);self.fixture(root);previous=os.getcwd()
+            try:
+                os.chdir(root)
+                p.dump('.pilot/report.json',{'summary':'document usage','changes':[{'path':'plugins/fleet/README.md','content':'# Existing command\n'}]})
+                with self.assertRaisesRegex(ValueError,'plugin version must increase'): p.apply_proposal()
+                self.assertEqual(p.load('.claude-plugin/marketplace.json')['plugins'][0]['version'],'1.0.0')
+            finally: os.chdir(previous)
+
     def test_capture_authenticates_producer_before_candidate_execution(self):
         with tempfile.TemporaryDirectory() as d:
             root=pathlib.Path(d);self.fixture(root);previous=os.getcwd()
