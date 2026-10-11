@@ -208,9 +208,9 @@ describe('window launches without --path', () => {
     expect(opensGodotWindow('godot.exe --headless')).toBe(false)
     expect(opensGodotWindow('godot.exe --help')).toBe(false)
     expect(opensGodotWindow('godot.exe --version')).toBe(false)
-    expect(opensGodotWindow('godot.exe --check-only --script res://probe.gd')).toBe(false)
-    expect(opensGodotWindow('godot.exe --import')).toBe(false)
-    expect(opensGodotWindow('godot.exe --export-release Windows out.exe')).toBe(false)
+    expect(opensGodotWindow('godot.exe --headless --check-only --script res://probe.gd')).toBe(false)
+    expect(opensGodotWindow('godot.exe --headless --import')).toBe(false)
+    expect(opensGodotWindow('godot.exe --headless --export-release Windows out.exe')).toBe(false)
   })
 })
 

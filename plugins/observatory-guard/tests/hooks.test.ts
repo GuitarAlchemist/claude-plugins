@@ -394,3 +394,145 @@ test('PowerShell interpolation with quoted parentheses is held before any shell 
   expect(f.ran()).toBe(false)
   expect(f.checked.length).toBe(0)
 })
+
+
+test('directory changes before a relative destination are refused before shell or checker', async ($, on) => {
+  const f = portableFixture(on)
+  for (const command of [
+    'cd D:/demo-copy; Copy-Item C:/other/scripts/broken.gd scripts/broken.gd',
+    'Set-Location D:/demo-copy; Copy-Item C:/other/scripts/broken.gd scripts/broken.gd',
+  ]) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/copy-unverified/)
+  }
+  expect(f.ran()).toBe(false)
+  expect(f.checked.length).toBe(0)
+})
+
+test('directory changes before a relative source never validate the initial project instead', async ($, on) => {
+  const f = portableFixture(on)
+  on('session.cwd', () => ({ value: 'C:/prototype' }))
+  const out = await $.tool.call({ tool: 'PowerShell', command: 'cd C:/other; Copy-Item scripts/scene.gd D:/demo-copy/scripts/scene.gd' })
+  expect(String(out.deny)).toMatch(/copy-unverified/)
+  expect(f.ran()).toBe(false)
+  expect(f.checked.length).toBe(0)
+})
+
+test('all literal stop PIDs include a protected target after the first operand', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  for (const command of ['taskkill /PID 111 /PID 777 /F', 'kill 111 777']) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/stop-demo/)
+  }
+  expect(f.asks()).toBe(2)
+  expect(f.ran()).toBe(false)
+})
+
+test('pkill Godot and killall Python reach the protected-process guard', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  const godot = await $.tool.call({ tool: 'Bash', command: 'pkill godot' })
+  expect(String(godot.deny)).toMatch(/stop-demo/)
+  expect(f.ran()).toBe(false)
+  shell(on, AUTHOR_COMFY, 'Annuler')
+  const python = await $.tool.call({ tool: 'Bash', command: 'killall python' })
+  expect(String(python.deny)).toMatch(/stop-comfyui/)
+})
+
+test('ambiguous stop operands are refused before process queries or the shell', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  for (const command of ['kill 111 $pid', 'taskkill /PID 111 /PID $pid /F']) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/stop-unverified/)
+  }
+  expect(f.ran()).toBe(false)
+  expect(f.queries.length).toBe(0)
+})
+
+test('failed process queries cannot authorize a protected stop or Godot window', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: 'query failed' } }))
+  for (const command of ['kill 111 777', 'killall python', 'godot.exe --editor']) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/process-unverified/)
+  }
+  expect(f.ran()).toBe(false)
+})
+
+test('Godot import and export without headless still ask before opening over a demo', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  for (const command of [
+    'godot.exe --export-release Windows out.exe',
+    'godot.exe --import',
+    'godot.exe --editor # --headless',
+    'godot.exe --editor | Write-Output --headless',
+    'godot.exe --editor -- --headless',
+    "godot.exe --script '--headless' --editor",
+    'Start-Process godot.exe -ArgumentList \'--path "C:/x --headless" --editor\'',
+  ]) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/window-over-demo/)
+  }
+  expect(f.ran()).toBe(false)
+  expect(f.asks()).toBe(7)
+})
+
+test('inspecting a Godot executable does not count as launching it', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  const out = await $.tool.call({ tool: 'PowerShell', command: "Get-Item 'D:/tools/fork.exe'" })
+  expect(out.deny).toBeUndefined()
+  expect(f.asks()).toBe(0)
+  expect(f.ran()).toBe(true)
+})
+
+test('Get-Content and cat inspect scripts without judging their text as executed code', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  on('fs.exists', () => ({ value: true }))
+  on('fs.read', () => ({ value: 'godot.exe --editor; Stop-Process -Id 777' }))
+  for (const command of ["Get-Content 'C:/work/probe.ps1'", "cat C:/work/probe.sh"]) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(out.deny).toBeUndefined()
+  }
+  expect(f.asks()).toBe(0)
+  expect(f.ran()).toBe(true)
+})
+
+test('invoking a script still judges its commands before running the shell', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  on('fs.exists', () => ({ value: true }))
+  on('fs.read', () => ({ value: 'Stop-Process -Id 777' }))
+  for (const command of [
+    'pwsh -File C:/work/probe.ps1',
+    'pwsh -ExecutionPolicy Bypass -File C:/work/probe.ps1',
+    'pwsh -File C:/work/probe.ps1 -Check',
+    'bash C:/work/probe.sh -c',
+    'python C:/work/probe.py -c',
+    'cmd /c C:/work/probe.cmd',
+  ]) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/stop-demo/)
+  }
+  expect(f.ran()).toBe(false)
+})
+
+test('shell code wrappers still guard actual Godot launches and invoked scripts', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  on('fs.exists', () => ({ value: true }))
+  on('fs.read', () => ({ value: 'Stop-Process -Id 777' }))
+  for (const command of [
+    'pwsh -Command "& \'D:/tools/fork.exe\' --editor"',
+    "bash -lc 'godot.exe --editor'",
+  ]) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/window-over-demo/)
+  }
+  const script = await $.tool.call({ tool: 'PowerShell', command: 'pwsh -Command "& C:/work/danger.ps1"' })
+  expect(String(script.deny)).toMatch(/stop-demo/)
+  expect(f.ran()).toBe(false)
+  for (const command of [
+    'pwsh -Command "Get-Content C:/work/danger.ps1"',
+    'pwsh -Command "Write-Output \'D:/tools/fork.exe --editor\'"',
+  ]) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(out.deny).toBeUndefined()
+  }
+})

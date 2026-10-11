@@ -474,3 +474,86 @@ test('a lookup that fails after a newer one landed leaves the pane to the newer 
   expect(await ui.find({ type: 'Button', text: /^▸ 2\. Am\b/ })).toBeDefined()
   expect(await ui.findAll({ type: 'Text', text: /denied/ })).toHaveLength(0)
 })
+
+// Contract derived from GA 879f148e3f2b7d55d9f465d74803e8c10647fb3e:
+// ChordParser requires EOF; GaChordToSet returns parse failures as ordinary strings.
+const G7_PINNED_SET = [
+  'Chord: G7', 'Pitch set:  {D, F, G, B} (4 tones)',
+  '  ICV:        <0 1 2 1 1 1>', '  Forte:      4-27', '  Prime form: 0 2 5 8',
+  'OPTIC-K layer: STRUCTURE (dims 6–29, w=0.45) — ICV drives structural similarity',
+].join('\n')
+
+test('known shell labels normalize to GA symbols while their displayed names are preserved', async ($, on) => {
+  const world = engine(on)
+  on('tool.call', { tool: /^mcp__ga__ga_chord_to_set$/ }, (_$, e) => {
+    const symbol = String({ ...e }['symbol'])
+    world.sets.push(symbol)
+    const result = symbol === 'G7' ? G7_PINNED_SET :
+      symbol === 'Bb7' ? G7_PINNED_SET.replace('Chord: G7', 'Chord: Bb7').replace('{D, F, G, B}', '{D, F, Ab, Bb}') :
+      "Error: could not parse chord '" + symbol + "'"
+    return { result }
+  })
+  const g7 = JSON.stringify(await $.tool.call({ tool: 'mcp__ga-chatbot__chord_diagram', chord: 'G7', ladder: true, ga_voicings: G7_SHELLS } as never))
+  expect(world.sets).toEqual(['G7'])
+  expect(g7).toContain('G7(shell)/B')
+  expect(g7).toContain('Forte 4-27')
+  const ui = await $.ui.mount({ plugin: 'ga-chatbot', surface: 'terminal', component: 'Pane', props: { title: 'GA chords', ...PROPS }, requestId: 'ga-chords' })
+  const climb = await ui.find({ type: 'Button', text: '▸ OPTIC-K ladder' })
+  await ui.press({ key: climb?.key ?? 'missing' })
+  expect(await ui.find({ type: 'Text', text: /ICV <0 1 2 1 1 1>/ })).toBeDefined()
+  expect(world.sets).toEqual(['G7'])
+  // Supply the exact voicing result so the fixture cannot substitute Cmaj7.
+  const bb = JSON.stringify(await $.tool.call({ tool: 'mcp__ga-chatbot__chord_diagram', chord: 'Bb7/D', ladder: true, ga_voicings: BB7_OVER_D } as never))
+  expect(world.sets).toContain('Bb7')
+  expect(bb).toContain('Bb7(shell)')
+})
+
+test('text errors, empty replies and missing set data are shown and never cached as successes', async ($, on) => {
+  const world = engine(on)
+  const answers = ["Error: could not parse chord 'G7(shell)'", '', 'Chord: G7\nPitch set: {}', G7_PINNED_SET]
+  on('tool.call', { tool: /^mcp__ga__ga_chord_to_set$/ }, (_$, e) => {
+    world.sets.push(String({ ...e }['symbol']))
+    return { result: answers.shift() ?? G7_PINNED_SET }
+  })
+  for (const expected of ['Error: could not parse', 'unknown or different chord', 'no usable chord-set data', 'Forte 4-27']) {
+    const output = JSON.stringify(await $.tool.call({ tool: 'mcp__ga-chatbot__chord_diagram', chord: 'G7', ladder: true, ga_voicings: G7_SHELLS } as never))
+    expect(output).toContain(expected)
+  }
+  expect(world.sets).toEqual(['G7', 'G7', 'G7', 'G7'])
+})
+
+test('a provided ga_set text error is reported without becoming a reusable success', async ($, on) => {
+  const world = engine(on)
+  const output = JSON.stringify(await $.tool.call({
+    tool: 'mcp__ga-chatbot__chord_diagram', chord: 'G7', ladder: true, ga_voicings: G7_SHELLS,
+    ga_set: "Error: could not parse chord 'G7(shell)'",
+  } as never))
+  expect(output).toContain("Error: could not parse chord 'G7(shell)'")
+  expect(world.sets).toEqual([])
+  await $.tool.call({ tool: 'mcp__ga-chatbot__chord_diagram', chord: 'G7', ladder: true, ga_voicings: G7_SHELLS } as never)
+  expect(world.sets).toEqual(['G7'])
+})
+
+test('normalization keeps legitimate slash qualities and omission notation', async ($, on) => {
+  const world = engine(on)
+  for (const name of ['C6/9', 'C(no 3)']) {
+    const sample = { ...JSON.parse(SEARCH), results: [{ ...JSON.parse(SEARCH).results[0], chordName: name }] }
+    await $.tool.call({ tool: 'mcp__ga-chatbot__chord_diagram', chord: name, ladder: true, ga_voicings: JSON.stringify(sample) } as never)
+  }
+  expect(world.sets).toEqual(['C6/9', 'C(no 3)'])
+})
+
+test('the pinned GA pitch-class notation T and E is accepted in a valid prime form', async ($, on) => {
+  const world = engine(on)
+  const sample = { ...JSON.parse(SEARCH), results: [{ ...JSON.parse(SEARCH).results[0], chordName: '12-1' }] }
+  on('tool.call', { tool: /^mcp__ga__ga_chord_to_set$/ }, (_$, e) => {
+    world.sets.push(String({ ...e }['symbol']))
+    return { result: 'Chord: 12-1\nPitch set: chromatic\nICV: <12 12 12 12 12 6>\nForte: 12-1\nPrime form: 0 1 2 3 4 5 6 7 8 9 T E' }
+  })
+  const output = JSON.stringify(await $.tool.call({
+    tool: 'mcp__ga-chatbot__chord_diagram', chord: '12-1', ladder: true, ga_voicings: JSON.stringify(sample),
+  } as never))
+  expect(output).toContain('Forte 12-1')
+  expect(output).not.toContain('no usable chord-set data')
+  expect(world.sets).toEqual(['12-1'])
+})

@@ -211,21 +211,25 @@ async function refreshPrs($: EngineInterface): Promise<void> {
           }
           const listed = JSON.parse(r.stdout) as GhPr[]
           if (listed.length) {
-            const [owner, name] = repo.split('/')
-            // One bounded query per repository. Missing/truncated/stale evidence stays unknown.
-            const query = `query { repository(owner: "${owner}", name: "${name}") { pullRequests(first: 100, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { number headRefOid reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved } } } } } }`
-            const review = await $.process.run(['gh', 'api', 'graphql', '-f', `query=${query}`], { timeoutMs: 30_000 })
-            if (review.exitCode === 0) {
-              const data = JSON.parse(review.stdout)
-              for (const p of listed) {
-                const found = data.data?.repository?.pullRequests?.nodes?.find((n: {number: number}) => n.number === p.number)
-                const threads = found?.reviewThreads
-                if (Array.isArray(threads?.nodes) && typeof threads.pageInfo?.hasNextPage === 'boolean') {
-                  p.reviewThreads = { head: found.headRefOid, complete: !threads.pageInfo.hasNextPage,
-                    unresolved: threads.nodes.filter((t: {isResolved?: boolean}) => t.isResolved !== true).length }
+            try {
+              const [owner, name] = repo.split('/')
+              // One bounded query per repository. Missing/truncated/stale evidence stays unknown.
+              const query = `query { repository(owner: "${owner}", name: "${name}") { pullRequests(first: 100, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { number headRefOid reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved } } } } } }`
+              const review = await $.process.run(['gh', 'api', 'graphql', '-f', `query=${query}`], { timeoutMs: 30_000 })
+              if (review.exitCode === 0) {
+                const data = JSON.parse(review.stdout)
+                for (const p of listed) {
+                  const found = data.data?.repository?.pullRequests?.nodes?.find((n: {number: number}) => n.number === p.number)
+                  const threads = found?.reviewThreads
+                  if (Array.isArray(threads?.nodes) && typeof threads.pageInfo?.hasNextPage === 'boolean') {
+                    p.reviewThreads = { head: found.headRefOid, complete: !threads.pageInfo.hasNextPage,
+                      unresolved: threads.nodes.filter((t: {isResolved?: boolean}) => t.isResolved !== true).length }
+                  }
                 }
-              }
-            } else errors.push(`${repo}: review threads unavailable; readiness unknown`)
+              } else errors.push(`${repo}: review threads unavailable; readiness unknown`)
+            } catch {
+              errors.push(`${repo}: review threads unavailable; readiness unknown`)
+            }
           }
           for (const p of listed) rows.push(toRow(repo, p))
         } catch (err) {

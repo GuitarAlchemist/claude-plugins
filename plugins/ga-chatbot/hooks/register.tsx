@@ -139,19 +139,33 @@ async function warmUp($: EngineInterface, model: string): Promise<void> {
 }
 
 // One question, one POST. The answer replaces the pending turn; nothing retries on its own.
+let conversationGeneration = 0
+
+async function newConversation($: EngineInterface): Promise<void> {
+  const mine = ++conversationGeneration
+  await update($, turns, all => (mine === conversationGeneration ? [] : all))
+  await update($, focus, old => (mine === conversationGeneration ? '' : old))
+  if (mine === conversationGeneration) $.ui.status(undefined)
+}
+
 async function ask($: EngineInterface, question: string): Promise<GaTurn | undefined> {
   const q = question.trim()
   if (!q) return undefined
+  const mine = conversationGeneration
+  const current = () => mine === conversationGeneration
   const list = await read($, turns)
+  if (!current()) return undefined
   if (list.some(t => t.status === 'pending')) {
     $.ui.toast('GA chatbot: still answering the previous question')
     return undefined
   }
   const at = await $.clock.now()
-  const id = `${at.toString(36)}-${list.length}`
+  if (!current()) return undefined
+  const id = mine + '-' + at.toString(36) + '-' + list.length
   const pending: GaTurn = { id, at, question: q, status: 'pending', answer: '', agentId: '', confidence: 0, routing: '', elapsedMs: 0, grounding: '', error: '' }
-  await update($, turns, all => [...all, pending].slice(-30))
-  await update($, focus, () => '')
+  await update($, turns, all => (current() ? [...all, pending].slice(-30) : all))
+  await update($, focus, old => (current() ? '' : old))
+  if (!current()) return undefined
   $.ui.status('GA chatbot: thinking…')
   let patch: Partial<GaTurn>
   try {
@@ -164,10 +178,12 @@ async function ask($: EngineInterface, question: string): Promise<GaTurn | undef
   } catch (err) {
     patch = { status: 'error', error: `not reachable at ${BASE}: ${why(err)}` }
   } finally {
-    $.ui.status(undefined)
+    if (current()) $.ui.status(undefined)
   }
-  await update($, turns, all => all.map(t => (t.id === id ? { ...t, ...patch } : t)))
-  return (await read($, turns)).find(t => t.id === id)
+  if (!current()) return undefined
+  await update($, turns, all => (current() ? all.map(t => (t.id === id ? { ...t, ...patch } : t)) : all))
+  const completed = await read($, turns)
+  return current() ? completed.find(t => t.id === id) : undefined
 }
 
 async function forward($: EngineInterface, id: string): Promise<void> {
@@ -290,7 +306,9 @@ function handOver(chord: string, withLadder: boolean): string {
 }
 
 // A slash chord is asked without its bass.
-const symbolOf = (name: string) => name.split('/')[0]?.trim() ?? ''
+const symbolOf = (name: string) => name.trim()
+  .replace(/\/\s*[A-G](?:#|b)?\s*$/, '')
+  .replace(/\s*\(shell\)\s*$/i, '').trim()
 
 // GA's own reading of a chord symbol, asked once per symbol, or taken from its answer when given. A
 // failure is kept to be shown, not to be served: the next press asks again.
@@ -300,7 +318,14 @@ async function setOf($: EngineInterface, name: string, consent: Consent, given?:
   const known = (await read($, sets))[symbol]
   if (known && !known.error && given === undefined) return known
   const r = given !== undefined ? { text: given, error: '', refused: false } : await chordToSet($, symbol, consent)
-  const info: ChordSet = r.error ? { forte: '', icv: '', prime: '', modal: '', error: r.error, refused: r.refused } : { ...parseSetInfo(r.text), error: '', refused: false }
+  const parsed = parseSetInfo(r.text)
+  const about = setChordOf(r.text)
+  const error = r.error || (/^\s*Error:/i.test(r.text) ? r.text.trim().slice(0, 200) :
+    about !== symbol ? 'GA returned a set for an unknown or different chord' :
+    !parsed.forte || !/^<\s*\d+(?:\s+\d+){5}\s*>$/.test(parsed.icv) || !/^(?:[0-9]|10|11|T|E)(?:\s+(?:[0-9]|10|11|T|E))*$/.test(parsed.prime)
+      ? 'GA returned no usable chord-set data' : '')
+  const info: ChordSet = error ? { forte: '', icv: '', prime: '', modal: '', error, refused: r.refused } :
+    { ...parsed, error: '', refused: false }
   await update($, sets, all => ({ ...all, [symbol]: info }))
   return info
 }
@@ -469,8 +494,8 @@ export const register: Register = on => {
     const givenSet = text('ga_set')
     const about = givenSet === undefined ? '' : setChordOf(givenSet)
     const wrongSet = about !== '' && about !== symbol
-    if (withLadder && first && givenSet !== undefined && !wrongSet) await setOf($, first.name, undefined, givenSet)
-    const report = await chordReport($, view, withLadder, limit, undefined)
+    const givenInfo = withLadder && first && givenSet !== undefined && !wrongSet ? await setOf($, first.name, undefined, givenSet) : undefined
+    const report = await chordReport($, view, withLadder, limit, undefined, givenInfo)
     const info = withLadder && first ? (await read($, sets))[symbol] : undefined
     const notes = [
       wrongSet ? `The ga_set given is GA's answer for ${about}, but the ladder is of ${symbol}.` : '',
@@ -530,7 +555,7 @@ export const register: Register = on => {
 
     // Earlier questions, one line each, newest last, as many as leave room for the open answer.
     const room = Math.max(0, (e.viewport?.rows ?? 30) - 14)
-    const earlier = list.filter(t => t !== shown).slice(-room)
+    const earlier = room > 0 ? list.filter(t => t !== shown).slice(-room) : []
 
     return (
       <Box flexDirection="column">
@@ -547,10 +572,7 @@ export const register: Register = on => {
             key="new"
             hotkey="n"
             label="New conversation"
-            onPress={async () => {
-              await update($, turns, all => all.filter(t => t.status === 'pending'))
-              await update($, focus, () => '')
-            }}
+            onPress={() => newConversation($)}
           />
           <Text {...(server.checkedAt ? { color: server.ok ? 'green' : 'yellow' } : { dimColor: true })} wrap="truncate-end">
             {' '}
@@ -650,7 +672,7 @@ export const register: Register = on => {
     view.voicings.forEach((v, i) => {
       const isOpen = open.includes(v.id)
       const climbed = climbing.includes(v.id)
-      const info = fromGa ? known[v.name.split('/')[0]?.trim() ?? ''] : undefined
+      const info = fromGa ? known[symbolOf(v.name)] : undefined
       sections.push(
         <Box key={`head-${v.id}`}>
           <Button key={`fold-${v.id}`} plain label={`${isOpen ? '▾' : '▸'} ${i + 1}. ${v.name}`} onPress={() => toggle(v.id)} />

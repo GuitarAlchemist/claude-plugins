@@ -281,6 +281,7 @@ async function beforeShell($: EngineInterface, command: string): Promise<string 
 
   const window = opensGodotWindow(text, config.godot)
   const stop = stopTargets(text, config.godot)
+  if (stop?.unverified) return 'observatory-guard: refused (stop-unverified). All process targets must be explicit and verifiable before stopping them.'
   if (!window && !stop) return undefined
 
   if (stop && (stop.allPython || stop.pids.length)) {
@@ -288,7 +289,7 @@ async function beforeShell($: EngineInterface, command: string): Promise<string 
     try {
       comfy = await listComfy($)
     } catch {
-      comfy = [] // cannot tell: the shell's own permission prompt still applies
+      return 'observatory-guard: refused (process-unverified). Could not verify running ComfyUI processes before this stop command.'
     }
     const theirs = comfy.filter(c => !c.mine && (stop.allPython || stop.pids.includes(c.pid)))
     if (theirs.length) {
@@ -317,7 +318,7 @@ async function beforeShell($: EngineInterface, command: string): Promise<string 
   try {
     procs = await listProcs($)
   } catch {
-    return undefined // cannot tell what runs: the shell's own permission prompt still applies
+    return 'observatory-guard: refused (process-unverified). Could not verify running Godot processes before this command.'
   }
   const demos = procs.filter(p => p.kind === 'demo')
   const describe = (p: ObservatoryGuardProc) => `PID ${p.pid}${p.title ? ` « ${p.title} »` : ''} (depuis ${p.started}) : ${p.cmd.slice(0, 140)}`

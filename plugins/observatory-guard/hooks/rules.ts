@@ -85,8 +85,31 @@ export function parseErrors(output: string): string[] {
 // The scripts a command runs (a .ps1, .sh, .py, .cmd or .bat named in it), to read their text too.
 export function scriptPaths(command: string): string[] {
   const out = new Set<string>()
-  for (const m of command.matchAll(/["']?([A-Za-z]:[\\/][^\s"'|;&<>]+?|[.\w~\-/\\]+?)\.(ps1|sh|py|cmd|bat)\b["']?/g)) {
-    out.add(`${m[1]}.${m[2]}`)
+  for (const statement of executedStatements(command)) {
+    const invocation = executableInvocation(statement).replace(/^&\s*/, '')
+    const tokens = [...invocation.matchAll(/"([^"]*)"|'([^']*)'|([^\s"',]+)/g)]
+      .map(m => m[1] ?? m[2] ?? m[3] ?? '')
+    const first = tokens.shift() ?? ''
+    const cmd = slash(first).split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
+    let path = /\.(?:ps1|sh|py|cmd|bat)$/i.test(first) ? first : ''
+    if (/^(?:pwsh|powershell|bash|sh|python[\d.]*|pythonw|cmd)$/.test(cmd)) {
+      path = ''
+      for (let i = 0; i < tokens.length; i++) {
+        const token = tokens[i] ?? ''
+        const powershell = /^(?:pwsh|powershell)$/.test(cmd)
+        const shell = /^(?:bash|sh)$/.test(cmd)
+        if (powershell && /^-(?:command|c|encodedcommand|e|ec)$/i.test(token) ||
+          shell && /^-[A-Za-z]*[cn][A-Za-z]*$/.test(token) ||
+          /^python/.test(cmd) && /^-[cm]$/.test(token)) break
+        if (powershell && /^-(?:file|f)$/i.test(token)) { path = tokens[i + 1] ?? ''; break }
+        if (powershell && /^-(?:executionpolicy|ep|inputformat|outputformat|windowstyle)$/i.test(token) ||
+          /^python/.test(cmd) && /^-[WX]$/.test(token)) { i++; continue }
+        if (cmd === 'cmd' && /^\/[ck]$/i.test(token) || token.startsWith('-')) continue
+        path = token
+        break
+      }
+    }
+    if (/\.(?:ps1|sh|py|cmd|bat)$/i.test(path) && !/[\x00-\x1f$\x60*?]/.test(path)) out.add(path)
   }
   return [...out].slice(0, 6)
 }
@@ -94,21 +117,59 @@ export function scriptPaths(command: string): string[] {
 // Judge each invocation, including a bare executable (Godot uses the current project or opens
 // its project manager). Assignments are not launches; headless flags apply only to that invocation.
 export function opensGodotWindow(text: string, binaries: readonly string[] = []): boolean {
-  const exe = /godot[^\s"'\\/]*\.exe/i
-  const namesGodot = (value: string) => exe.test(value) || binaries.some(b => slash(value).toLowerCase().includes(b.toLowerCase()))
-  const vars = new Set<string>()
-  for (const m of text.matchAll(/\$(\w+)\s*=\s*['"]([^'"\n]+)['"]/g)) {
-    if (namesGodot(m[2] ?? '')) vars.add(m[1] ?? '')
+  const namesGodot = (value: string) => {
+    const path = slash(value).toLowerCase()
+    const base = path.split('/').pop() ?? ''
+    return /^godot[^\s"']*\.exe$/i.test(base) ||
+      binaries.some(binary => path === slash(binary).toLowerCase())
   }
-  return text.split(/\r?\n|;|&&|\|\|/).some(statement => {
-    if (/observatory-dlss\.cmd/i.test(statement)) return true
-    if (/^\s*\$\w+\s*=\s*['"][^'"]+['"]\s*$/.test(statement)) return false
-    const viaVariable = [...vars].some(v =>
-      new RegExp(`(?:&\\s*|-(?:FilePath|f)\\s+)\\$${v}\\b`, 'i').test(statement))
-    if (!namesGodot(statement) && !viaVariable) return false
-    if (/--(?:headless|help|version)\b/.test(statement)) return false
-    return !/--check-only|--export-(?:release|debug|pack)|--import\b/.test(statement) ||
-      /--resolution|--maximized|--fullscreen/.test(statement)
+  const vars = new Map<string, string>()
+  for (const m of text.matchAll(/\$(\w+)\s*=\s*['"]([^'"\n]+)['"]/g)) {
+    if (namesGodot(m[2] ?? '')) vars.set((m[1] ?? '').toLowerCase(), m[2] ?? '')
+  }
+  const resolve = (value: string) => value.startsWith('$') ? vars.get(value.slice(1).toLowerCase()) ?? value : value
+  return executedStatements(text).some(statement => {
+    const invocation = executableInvocation(statement).replace(/^&\s*/, '')
+    const words = [...invocation.matchAll(/"([^"]*)"|'([^']*)'|([^\s"',]+)/g)]
+    const tokens = words.map(m => m[1] ?? m[2] ?? m[3] ?? '')
+    const first = tokens.shift() ?? ''
+    words.shift()
+    if (/^observatory-dlss\.cmd$/i.test(slash(first).split('/').pop() ?? '')) return true
+    let exe = resolve(first)
+    let args = tokens
+    if (/^(?:Start-Process|saps|start)$/i.test(first)) {
+      const pathAt = tokens.findIndex(token => /^-(?:FilePath|f)$/i.test(token))
+      exe = resolve(pathAt >= 0 ? tokens[pathAt + 1] ?? '' : tokens[0] ?? '')
+      const argsAt = tokens.findIndex(token => /^-(?:ArgumentList|args)$/i.test(token))
+      const values = []
+      const tail = argsAt >= 0 ? words.slice(argsAt + 1) : []
+      const array = tail.some(word => /^@\(/.test(word[0]))
+      for (const word of tail) {
+        if (/^-(?:PassThru|Wait|NoNewWindow|WorkingDirectory|WindowStyle|RedirectStandard\w+|Verb|UseNewEnvironment)$/i.test(word[0])) break
+        if (/^(?:@\(|\))$/.test(word[0])) continue
+        values.push(word[1] ?? word[2] ?? word[3] ?? '')
+      }
+      // Start-Process joins an array with spaces. Parse the resulting command line while
+      // retaining quoted argument values; data containing "--headless" is never an option.
+      const line = values.join(' ')
+      args = [...line.matchAll(/"([^"]*)"|'([^']*)'|([^\s"']+)/g)]
+        .map(m => m[1] ?? m[2] ?? m[3] ?? '')
+      // An array element containing spaces is only one argument if it includes its own quotes.
+      // Unknown quoting is held as windowed rather than granting a headless exemption.
+      if (array && values.some(value => /\s/.test(value) && !/^['"].*['"]$/.test(value))) args = []
+    }
+    if (!namesGodot(exe)) return false
+    const end = args.indexOf('--')
+    const options = end >= 0 ? args.slice(0, end) : args
+    // Import/export may still initialize a display. Require an explicit non-window mode.
+    const takesValue = /^(?:--path|--scene|--script|-s|--editor-pid|--display-driver|--rendering-driver|--rendering-method|--audio-driver|--resolution|--position|--screen|--max-fps|--fixed-fps|--time-scale|--quit-after|--log-file|--remote-debug|--remote-fs|--remote-fs-password|--export-release|--export-debug|--export-pack)$/
+    for (let i = 0; i < options.length; i++) {
+      const option = options[i] ?? ''
+      if (/^--export-(?:release|debug|pack)$/.test(option)) { i += 2; continue }
+      if (takesValue.test(option)) { i++; continue }
+      if (/^(?:--headless|--help|--version)$/.test(option)) return false
+    }
+    return true
   })
 }
 
@@ -136,18 +197,40 @@ export function forkWithFixedFps(text: string, fork?: string): boolean {
 
 // The processes a command would stop: numeric PIDs, or every Godot (every Python) when it stops them by
 // name.
-export type StopTargets = { pids: number[]; allGodot: boolean; allPython: boolean }
+export type StopTargets = { pids: number[]; allGodot: boolean; allPython: boolean; unverified?: boolean }
 
 export function stopTargets(text: string, binaries: readonly string[] = []): StopTargets | undefined {
-  if (!/\b(?:Stop-Process|spps|taskkill|kill)\b|\.Kill\(/i.test(text)) return undefined
+  if (!/\b(?:Stop-Process|spps|taskkill|kill|pkill|killall)\b|\.Kill\(/i.test(text)) return undefined
   const pids = new Set<number>()
   const add = (list: string) => {
     for (const n of list.split(/[\s,]+/)) if (/^\d+$/.test(n)) pids.add(Number(n))
   }
   for (const m of text.matchAll(/(?:Stop-Process|spps)\b[^\n;|]*?(?:-Id|-PID)\s+((?:\d+\s*,\s*)*\d+)/gi)) add(m[1] ?? '')
   for (const m of text.matchAll(/(?:Stop-Process|spps)\s+((?:\d+\s*,\s*)*\d+)\b/gi)) add(m[1] ?? '')
-  for (const m of text.matchAll(/taskkill\b[^\n;|]*?\/PID\s+(\d+)/gi)) add(m[1] ?? '')
-  for (const m of text.matchAll(/\bkill\s+(?:-\w+\s+)*(\d+)/g)) add(m[1] ?? '')
+  let unverified = false
+  for (const statement of executedStatements(text)) {
+    const invocation = executableInvocation(statement)
+    const first = invocation.match(/^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|([^\s]+))/)
+    const cmd = slash(first?.[1] ?? first?.[2] ?? first?.[3] ?? '').split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
+    const args = invocation.slice(first?.[0].length ?? 0).trim()
+    if (cmd === 'taskkill' && /\/PID/i.test(args)) {
+      const operands = [...args.matchAll(/(?:^|\s)\/PID\s+("[^"]*"|'[^']*'|[^\s]+)/gi)]
+      if (!operands.length || (args.match(/\/PID/gi)?.length ?? 0) !== operands.length) unverified = true
+      for (const operand of operands) {
+        const value = (operand[1] ?? '').replace(/^(['"])(.*)\1$/, '$2')
+        if (/^\d+$/.test(value)) add(value)
+        else unverified = true
+      }
+    }
+    if (cmd === 'kill') {
+      const operands = args.replace(/^(?:(?:-\w+|--)\s+)+/, '').split(/\s+/).filter(Boolean)
+      if (!operands.length) unverified = true
+      for (const operand of operands) {
+        if (/^\d+$/.test(operand)) add(operand)
+        else unverified = true
+      }
+    }
+  }
   for (const m of text.matchAll(/Get-Process\s+-Id\s+(\d+)[^\n;]*\|\s*Stop-Process/gi)) add(m[1] ?? '')
   const named = [...text.matchAll(/(?:(?:Stop-Process|spps|Get-Process)\b[^\n;|]*-Name|taskkill\b[^\n;|]*\/IM)\s+(?:"([^"]+)"|'([^']+)'|([^\s;|]+))/gi)]
     .map(m => (m[1] ?? m[2] ?? m[3] ?? '').toLowerCase().replace(/\.exe$/i, ''))
@@ -165,8 +248,8 @@ export function stopTargets(text: string, binaries: readonly string[] = []): Sto
     /taskkill\b[^\n;|]*\/IM\s+['"]?python/i.test(text) ||
     /Get-Process[^\n|]*python[^\n]*\|\s*Stop-Process/i.test(text) ||
     /\b(?:pkill|killall)\b[^\n;|]*python/i.test(text)
-  if (pids.size === 0 && !allGodot && !allPython) return undefined
-  return { pids: [...pids], allGodot, allPython }
+  if (pids.size === 0 && !allGodot && !allPython && !unverified) return undefined
+  return { pids: [...pids], allGodot, allPython, ...(unverified ? { unverified: true } : {}) }
 }
 
 // ---- ComfyUI ----
@@ -263,6 +346,43 @@ function assignmentExpressions(text: string): string[] {
   return out
 }
 
+function executableInvocation(statement: string): string {
+  const prefix = statement.match(/^(?:(?:\[[\w.]+(?:\[\])?\]\s*)?\$[\w:]+\s*=\s*)?((?:(?:\$\(|@\(|\()\s*)*)(?=&\s*|[^\s"'$(@&])/)
+  let invocation = statement.slice(prefix?.[0].length ?? 0)
+  const groups = prefix?.[1].match(/\(/g)?.length ?? 0
+  for (let i = 0; i < groups; i++) invocation = invocation.replace(/\)\s*$/, '').trim()
+  return invocation
+}
+
+// Descend only through literal code arguments of shells that execute them.
+// Keep the wrapper as well; unrelated quoted data and Python code are not shell invocations.
+function executedStatements(text: string, depth = 0): string[] {
+  const out: string[] = []
+  for (const statement of shellStatements(text)) {
+    out.push(statement)
+    if (depth >= 2) continue
+    const invocation = executableInvocation(statement)
+    const first = invocation.match(/^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|([^\s]+))/)
+    const cmd = slash(first?.[1] ?? first?.[2] ?? first?.[3] ?? '').split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
+    if (!/^(?:pwsh|powershell|bash|sh|cmd)$/.test(cmd)) continue
+    const code = invocation.match(/(?:^|\s)(?:-c|-command|\/c)\s+(?:"([^"]*)"|'([^']*)'|(.+))$/i)
+      ?? (/^(?:bash|sh)$/.test(cmd)
+        ? invocation.match(/(?:^|\s)-[A-Za-z]*c[A-Za-z]*\s+(?:"([^"]*)"|'([^']*)'|(.+))$/)
+        : null)
+    if (code) out.push(...executedStatements(code[1] ?? code[2] ?? code[3] ?? '', depth + 1))
+  }
+  return out
+}
+
+function changesWorkingDirectory(text: string): boolean {
+  return executedStatements(text).some(statement => {
+    const invocation = executableInvocation(statement)
+    const first = invocation.match(/^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|([^\s]+))/)
+    const cmd = slash(first?.[1] ?? first?.[2] ?? first?.[3] ?? '').split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
+    return /^(?:cd|chdir|set-location|sl|push-location|pushd|pop-location|popd)$/.test(cmd)
+  })
+}
+
 function copyStatements(text: string, depth = 0): string[] {
   return shellStatements(text).filter(statement => {
     // A double-quoted PowerShell assignment may execute $(); single quotes stay data.
@@ -275,10 +395,7 @@ function copyStatements(text: string, depth = 0): string[] {
       }
     }
     // Only unwrap executable prefixes. Keep the original statement so unsupported forms are held.
-    const prefix = statement.match(/^(?:(?:\[[\w.]+(?:\[\])?\]\s*)?\$[\w:]+\s*=\s*)?((?:(?:\$\(|@\(|\()\s*)*)(?=&\s*|[^\s"'$(@&])/)
-    let invocation = statement.slice(prefix?.[0].length ?? 0)
-    const groups = prefix?.[1].match(/\(/g)?.length ?? 0
-    for (let i = 0; i < groups; i++) invocation = invocation.replace(/\)\s*$/, '').trim()
+    const invocation = executableInvocation(statement)
     const first = invocation.match(/^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|([^\s]+))/)
     const cmd = slash(first?.[1] ?? first?.[2] ?? first?.[3] ?? '').split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
     if (['copy-item', 'cpi', 'cp', 'copy', 'robocopy', 'xcopy'].includes(cmd)) return true
@@ -370,6 +487,7 @@ export function shortCmd(cmd: string): string {
 // wildcard, computed, wrapper and script copies require an explicit supported form first.
 export function dlssCopySources(text: string, cwd: string, copy: string): { sources: string[]; error?: string } {
   const sources: string[] = []
+  if (changesWorkingDirectory(text)) return { sources, error: 'copy command changes working directory; relative paths cannot be verified' }
   const resolve = (path: string) => {
     const p = slash(path)
     if (/[\$`*?{}()[\],]/.test(p)) return undefined

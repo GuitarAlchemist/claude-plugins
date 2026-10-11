@@ -451,3 +451,66 @@ test('an answer one of the chatbot\'s LLM agents wrote (mode "Agent" from GA\'s 
   const turn = { id: 't', at: 0, question: 'What is D Dorian?', ...parseAnswer(200, JSON.stringify(BY_AGENT)) }
   expect(forwardText(turn)).toContain("It came from the chatbot's theory agent, its model alone without GA's tools: check its chords and numbers with GA's tools (mcp__ga__*) before relying on them.")
 })
+
+test('New conversation detaches a pending reply and keeps the next request history empty', async ($, on) => {
+  engine(on)
+  let release = () => {}
+  let started = () => {}
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const called = new Promise<void>(resolve => { started = resolve })
+  const bodies: string[] = []
+  on('http.fetch', async (_$, e) => {
+    bodies.push(e.init?.body ?? '')
+    if (bodies.length === 1) { started(); await gate }
+    return reply(200, ANSWER)
+  })
+  const first = $.command.run(ga('A'))
+  await called
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'new' })
+  release()
+  await first
+  await $.command.run(ga('B'))
+  expect(JSON.parse(bodies[1] ?? '{}').conversationHistory).toEqual([])
+  expect(await ui.find({ type: 'Text', text: /You: A/ })).toBeUndefined()
+})
+
+test('an old reply cannot clear the status or overwrite a new conversation while B is pending', async ($, on) => {
+  const shown = engine(on)
+  let releaseA = () => {}, releaseB = () => {}, calledA = () => {}, calledB = () => {}
+  const gateA = new Promise<void>(resolve => { releaseA = resolve })
+  const gateB = new Promise<void>(resolve => { releaseB = resolve })
+  const startedA = new Promise<void>(resolve => { calledA = resolve })
+  const startedB = new Promise<void>(resolve => { calledB = resolve })
+  const bodies: string[] = []
+  on('http.fetch', async (_$, e) => {
+    bodies.push(e.init?.body ?? '')
+    if (JSON.parse(e.init?.body ?? '{}').message === 'A') { calledA(); await gateA }
+    else { calledB(); await gateB }
+    return reply(200, ANSWER)
+  })
+  const first = $.command.run(ga('A'))
+  await startedA
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'new' })
+  const second = $.command.run(ga('B'))
+  try {
+    await Promise.race([startedB, second.then(() => { throw new Error('B returned before starting its request') })])
+    const statuses = shown.length
+    releaseA()
+    await first
+    expect(shown.length).toBe(statuses)
+    expect(JSON.parse(bodies[1] ?? '{}').conversationHistory).toEqual([])
+    expect(await ui.find({ type: 'Text', text: /You: A/ })).toBeUndefined()
+    releaseB()
+    await second
+    await $.command.run(ga('C'))
+    expect(JSON.parse(bodies[2] ?? '{}').conversationHistory).toEqual([
+      { role: 'user', content: 'B' }, { role: 'assistant', content: ANSWER.naturalLanguageAnswer },
+    ])
+  } finally {
+    releaseA()
+    releaseB()
+    await Promise.allSettled([first, second])
+  }
+})

@@ -1,6 +1,6 @@
 {
   "name": "shared-repo-guard",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": { "name": "Stephane Pareilleux" },
   "description": "Holds blanket git commands in the shared clones for the user's confirmation, with what they would touch; adds /lanes and a /prs pane of open pull requests and their CI.",
   "types": "./types/index.d.ts"
