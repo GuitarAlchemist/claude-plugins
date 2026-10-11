@@ -225,7 +225,7 @@ export function stopTargets(text: string, binaries: readonly string[] = []): Sto
           else unverified = true
         }
       } else if (id || /-InputObject\b/i.test(args)) unverified = true
-      const name = selectors.match(/(?:^|\s)-Name\s+("[^"]*"|'[^']*'|[^\s]+)/i)?.[1]
+      const name = selectors.match(/(?:^|\s)-Name\b\s*([\s\S]*?)(?=\s+-[A-Za-z]|$)/i)?.[1]
       if (name && /[$`,*?]/.test(name)) unverified = true
       if (selectors && list === undefined && !name) unverified = true
       // A bare pipeline stop is supported only when Get-Process names literal targets.

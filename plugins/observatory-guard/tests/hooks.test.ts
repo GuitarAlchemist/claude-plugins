@@ -531,7 +531,7 @@ test('PowerShell switches before positional PIDs still protect the demo', async 
   expect(f.asks()).toBe(2)
 })
 
-for (const command of ['Stop-Process -Name other,godot', "Stop-Process -Name '*'"]) {
+for (const command of ['Stop-Process -Name other,godot', "Stop-Process -Name 'other','godot'", "Stop-Process -Name '*'"]) {
   test('unresolved PowerShell name selectors are refused: ' + command, async ($, on) => {
     const f = configuredDemoFixture(on)
     const out = await $.tool.call({ tool: 'PowerShell', command })
