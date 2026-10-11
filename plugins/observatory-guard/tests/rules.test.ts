@@ -76,8 +76,8 @@ describe('stopping', () => {
     expect(stopTargets('taskkill /IM godot.windows.editor.x86_64.exe /F')?.allGodot).toBe(true)
   })
 
-  test('a probe stopping its own process by variable is not judged', async () => {
-    expect(stopTargets('if (-not $p.WaitForExit(240000)) { Stop-Process -Id $p.Id -Force }')).toBeUndefined()
+  test('variable process ownership cannot be proved by a text guard', async () => {
+    expect(stopTargets('if (-not $p.WaitForExit(240000)) { Stop-Process -Id $p.Id -Force }')?.unverified).toBe(true)
     expect(stopTargets('Get-Process -Id 5 | Select-Object Name')).toBeUndefined()
   })
 })
@@ -114,7 +114,7 @@ describe('processes', () => {
 
   test('ConvertTo-Json gives an object for one process, a list for several', async () => {
     expect(parseProcs('{"pid":7,"ppid":1,"cmd":"godot.exe","title":"","started":"17:01"}').length).toBe(1)
-    expect(parseProcs('[{"pid":7},{"pid":8}]').map(x => x.pid)).toEqual([7, 8])
+    expect(parseProcs('[{"pid":7,"cmd":"godot.exe"},{"pid":8,"cmd":"godot.exe"}]').map(x => x.pid)).toEqual([7, 8])
     expect(parseProcs('  ')).toEqual([])
   })
 

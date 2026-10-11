@@ -19,6 +19,7 @@ import {
   rootOf,
   normalizePath,
   scriptPaths,
+  shellUnverified,
   shortCmd,
   slash,
   stopTargets,
@@ -242,7 +243,9 @@ function refusal(rule: string, why: string, answer: string | undefined): string 
 
 // Undefined when the command may run; otherwise the refusal the model reads.
 async function beforeShell($: EngineInterface, command: string): Promise<string | undefined> {
+  if (shellUnverified(command)) return 'observatory-guard: refused (shell-unverified). Nested shell code exceeds the inspection limit; use a directly inspectable command.'
   const text = await commandText($, command)
+  if (shellUnverified(text)) return 'observatory-guard: refused (shell-unverified). A script contains nested shell code beyond the inspection limit.'
 
   const config = await liveConfig($)
   const [, copy] = config.roots

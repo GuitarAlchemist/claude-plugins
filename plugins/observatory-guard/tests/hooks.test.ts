@@ -182,10 +182,10 @@ test('copying out of DLSS does not validate unrelated prototype scripts', async 
   expect(f.checked.length).toBe(0)
 })
 
-function portableFixture(on: Parameters<Parameters<typeof test>[1]>[1], roots = 'C:/prototype;D:/demo-copy', binaries = 'C:/tools/stock.exe;D:/tools/fork.exe', missing = false) {
+function portableFixture(on: Parameters<Parameters<typeof test>[1]>[1], roots = 'C:/prototype;D:/demo-copy', binaries = 'C:/tools/stock.exe;D:/tools/fork.exe', missing = false, cwd = 'C:/work') {
   let ran = false
   const checked: string[][] = []
-  on('session.cwd', () => ({ value: 'C:/work' }))
+  on('session.cwd', () => ({ value: cwd }))
   on('env.get', ($, e) => ({ value: e.name === 'OBSERVATORY_GUARD_ROOTS' ? roots : binaries }))
   on('clock.now', () => ({ value: 1791600000000 }))
   on('fs.list', () => ({ value: [] }))
@@ -271,7 +271,7 @@ test('copy words in arguments and comments do not block ordinary shell commands'
   expect(f.checked.length).toBe(0)
 })
 
-function configuredDemoFixture(on: Parameters<Parameters<typeof test>[1]>[1]) {
+function configuredDemoFixture(on: Parameters<Parameters<typeof test>[1]>[1], { comfy = '', failure = '', stdout = undefined as string | undefined } = {}) {
   let ran = false
   let asks = 0
   const queries: string[] = []
@@ -283,7 +283,7 @@ function configuredDemoFixture(on: Parameters<Parameters<typeof test>[1]>[1]) {
     const query = e.argv.join(' ')
     queries.push(query)
     const findsConfiguredDemo = query.includes('fork.exe') && query.includes('Get-CimInstance')
-    return { value: { exitCode: 0, stdout: findsConfiguredDemo ? JSON.stringify({ pid: 777, ppid: 1, cmd: 'D:/tools/fork.exe --path D:/demo-copy', title: 'Demo', started: '10:00' }) : '', stderr: '' } }
+    return { value: { exitCode: failure ? 1 : 0, stdout: stdout ?? (findsConfiguredDemo ? JSON.stringify({ pid: 777, ppid: 1, cmd: 'D:/tools/fork.exe --path D:/demo-copy', title: 'Demo', started: '10:00' }) : comfy), stderr: failure } }
   })
   on('tool.call', ($, e) => {
     if (e.tool === 'AskUserQuestion') { asks++; return { result: { answers: { [e.questions[0].question]: 'Annuler' } } } }
@@ -410,8 +410,7 @@ test('directory changes before a relative destination are refused before shell o
 })
 
 test('directory changes before a relative source never validate the initial project instead', async ($, on) => {
-  const f = portableFixture(on)
-  on('session.cwd', () => ({ value: 'C:/prototype' }))
+  const f = portableFixture(on, undefined, undefined, false, 'C:/prototype')
   const out = await $.tool.call({ tool: 'PowerShell', command: 'cd C:/other; Copy-Item scripts/scene.gd D:/demo-copy/scripts/scene.gd' })
   expect(String(out.deny)).toMatch(/copy-unverified/)
   expect(f.ran()).toBe(false)
@@ -429,11 +428,10 @@ test('all literal stop PIDs include a protected target after the first operand',
 })
 
 test('pkill Godot and killall Python reach the protected-process guard', async ($, on) => {
-  const f = configuredDemoFixture(on)
+  const f = configuredDemoFixture(on, { comfy: AUTHOR_COMFY })
   const godot = await $.tool.call({ tool: 'Bash', command: 'pkill godot' })
   expect(String(godot.deny)).toMatch(/stop-demo/)
   expect(f.ran()).toBe(false)
-  shell(on, AUTHOR_COMFY, 'Annuler')
   const python = await $.tool.call({ tool: 'Bash', command: 'killall python' })
   expect(String(python.deny)).toMatch(/stop-comfyui/)
 })
@@ -449,8 +447,7 @@ test('ambiguous stop operands are refused before process queries or the shell', 
 })
 
 test('failed process queries cannot authorize a protected stop or Godot window', async ($, on) => {
-  const f = configuredDemoFixture(on)
-  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: 'query failed' } }))
+  const f = configuredDemoFixture(on, { failure: 'query failed' })
   for (const command of ['kill 111 777', 'killall python', 'godot.exe --editor']) {
     const out = await $.tool.call({ tool: 'PowerShell', command })
     expect(String(out.deny)).toMatch(/process-unverified/)
@@ -513,6 +510,37 @@ test('invoking a script still judges its commands before running the shell', asy
   }
   expect(f.ran()).toBe(false)
 })
+
+test('deep shell wrappers are refused when their executed code cannot be fully inspected', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  for (const command of ['pwsh -c pwsh -c pwsh -c godot.exe --editor', 'pwsh -c pwsh -c pwsh -c C:/work/danger.ps1']) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/shell-unverified/)
+  }
+  expect(f.ran()).toBe(false)
+  expect(f.queries.length).toBe(0)
+})
+
+test('dynamic PowerShell process targets are refused before queries or shell execution', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  for (const command of ['Stop-Process -Id $pid', 'Stop-Process -Id 111,$pid -Force', 'spps 111,$pid', 'Stop-Process -Id $p.Id -Force', 'taskkill /IM $name /F', 'pkill $name', 'killall $name']) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/stop-unverified/)
+  }
+  expect(f.ran()).toBe(false)
+  expect(f.queries.length).toBe(0)
+})
+
+for (const stdout of ['{}', '"oops"', '[{"pid":777}]', '[{"pid":777,"cmd":null}]']) {
+  test('unusable process records cannot prove protected processes absent: ' + stdout, async ($, on) => {
+    const f = configuredDemoFixture(on, { stdout })
+    for (const command of ['godot.exe --editor', 'Stop-Process -Id 777']) {
+      const out = await $.tool.call({ tool: 'PowerShell', command })
+      expect(String(out.deny)).toMatch(/process-unverified/)
+    }
+    expect(f.ran()).toBe(false)
+  })
+}
 
 test('shell code wrappers still guard actual Godot launches and invoked scripts', async ($, on) => {
   const f = configuredDemoFixture(on)

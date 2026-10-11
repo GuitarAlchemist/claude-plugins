@@ -205,14 +205,30 @@ export function stopTargets(text: string, binaries: readonly string[] = []): Sto
   const add = (list: string) => {
     for (const n of list.split(/[\s,]+/)) if (/^\d+$/.test(n)) pids.add(Number(n))
   }
-  for (const m of text.matchAll(/(?:Stop-Process|spps)\b[^\n;|]*?(?:-Id|-PID)\s+((?:\d+\s*,\s*)*\d+)/gi)) add(m[1] ?? '')
-  for (const m of text.matchAll(/(?:Stop-Process|spps)\s+((?:\d+\s*,\s*)*\d+)\b/gi)) add(m[1] ?? '')
   let unverified = false
   for (const statement of executedStatements(text)) {
     const invocation = executableInvocation(statement)
     const first = invocation.match(/^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|([^\s]+))/)
     const cmd = slash(first?.[1] ?? first?.[2] ?? first?.[3] ?? '').split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
     const args = invocation.slice(first?.[0].length ?? 0).trim()
+    if (/^(?:pkill|killall)$/.test(cmd) && /[$`]/.test(args) ||
+      cmd === 'taskkill' && /\/IM\s+(?:[^\n;]*[$`])/i.test(args)) unverified = true
+    if (/^(?:stop-process|spps)$/.test(cmd)) {
+      const id = args.match(/(?:^|\s)-(?:Id|PID)\b\s*([\s\S]*?)(?=\s+-[A-Za-z]|$)/i)
+      const positional = !args.startsWith('-') ? args.split(/\s+-[A-Za-z]/)[0] : undefined
+      const list = id?.[1] ?? positional
+      if (list !== undefined && list.trim()) {
+        for (const operand of list.split(/[\s,]+/).filter(Boolean)) {
+          const value = operand.replace(/^(['"])(.*)\1$/, '$2')
+          if (/^\d+$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) > 0) add(value)
+          else unverified = true
+        }
+      } else if (id || /-InputObject\b/i.test(args)) unverified = true
+      const name = args.match(/(?:^|\s)-Name\s+("[^"]*"|'[^']*'|[^\s]+)/i)?.[1]
+      if (name && /[$`]/.test(name)) unverified = true
+      // A bare pipeline stop is supported only when Get-Process names literal targets.
+      if (!args && !/Get-Process\s+-(?:Id\s+\d+(?:\s*,\s*\d+)*|Name\s+['"]?[\w.*-]+['"]?)\s*\|\s*Stop-Process\b/i.test(text)) unverified = true
+    }
     if (cmd === 'taskkill' && /\/PID/i.test(args)) {
       const operands = [...args.matchAll(/(?:^|\s)\/PID\s+("[^"]*"|'[^']*'|[^\s]+)/gi)]
       if (!operands.length || (args.match(/\/PID/gi)?.length ?? 0) !== operands.length) unverified = true
@@ -356,11 +372,10 @@ function executableInvocation(statement: string): string {
 
 // Descend only through literal code arguments of shells that execute them.
 // Keep the wrapper as well; unrelated quoted data and Python code are not shell invocations.
-function executedStatements(text: string, depth = 0): string[] {
+function executedStatements(text: string, depth = 0, state = { unverified: false }): string[] {
   const out: string[] = []
   for (const statement of shellStatements(text)) {
     out.push(statement)
-    if (depth >= 2) continue
     const invocation = executableInvocation(statement)
     const first = invocation.match(/^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|([^\s]+))/)
     const cmd = slash(first?.[1] ?? first?.[2] ?? first?.[3] ?? '').split('/').pop()?.replace(/\.exe$/i, '').toLowerCase() ?? ''
@@ -369,9 +384,18 @@ function executedStatements(text: string, depth = 0): string[] {
       ?? (/^(?:bash|sh)$/.test(cmd)
         ? invocation.match(/(?:^|\s)-[A-Za-z]*c[A-Za-z]*\s+(?:"([^"]*)"|'([^']*)'|(.+))$/)
         : null)
-    if (code) out.push(...executedStatements(code[1] ?? code[2] ?? code[3] ?? '', depth + 1))
+    if (code) {
+      if (depth >= 2) state.unverified = true
+      else out.push(...executedStatements(code[1] ?? code[2] ?? code[3] ?? '', depth + 1, state))
+    }
   }
   return out
+}
+
+export function shellUnverified(text: string): boolean {
+  const state = { unverified: false }
+  executedStatements(text, 0, state)
+  return state.unverified
 }
 
 function changesWorkingDirectory(text: string): boolean {
@@ -448,7 +472,13 @@ export function parseProcs(json: string): GodotProc[] {
   const raw = JSON.parse(t) as unknown
   const list = Array.isArray(raw) ? raw : [raw]
   return list.map(r => {
+    if (r === null || typeof r !== 'object' || Array.isArray(r)) throw new Error('Invalid process record')
     const o = r as Record<string, unknown>
+    if (!Number.isSafeInteger(o.pid) || Number(o.pid) <= 0 || typeof o.cmd !== 'string' || !o.cmd.trim() ||
+      o.ppid !== undefined && (!Number.isSafeInteger(o.ppid) || Number(o.ppid) < 0) ||
+      ['title', 'started'].some(key => o[key] !== undefined && o[key] !== null && typeof o[key] !== 'string')) {
+      throw new Error('Unusable process record')
+    }
     return {
       pid: Number(o.pid ?? 0),
       ppid: Number(o.ppid ?? 0),

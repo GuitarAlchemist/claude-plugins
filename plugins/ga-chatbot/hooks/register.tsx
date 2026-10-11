@@ -312,17 +312,22 @@ const symbolOf = (name: string) => name.trim()
 
 // GA's own reading of a chord symbol, asked once per symbol, or taken from its answer when given. A
 // failure is kept to be shown, not to be served: the next press asks again.
+function usableSet(info: ChordSet): boolean {
+  return !!info.forte && /^<\s*\d+(?:\s+\d+){5}\s*>$/.test(info.icv) &&
+    /^(?:[0-9]|10|11|T|E)(?:\s+(?:[0-9]|10|11|T|E))*$/.test(info.prime)
+}
+
 async function setOf($: EngineInterface, name: string, consent: Consent, given?: string): Promise<ChordSet | undefined> {
   const symbol = symbolOf(name)
   if (!symbol) return undefined
   const known = (await read($, sets))[symbol]
-  if (known && !known.error && given === undefined) return known
+  if (known && !known.error && usableSet(known) && given === undefined) return known
   const r = given !== undefined ? { text: given, error: '', refused: false } : await chordToSet($, symbol, consent)
   const parsed = parseSetInfo(r.text)
   const about = setChordOf(r.text)
   const error = r.error || (/^\s*Error:/i.test(r.text) ? r.text.trim().slice(0, 200) :
     about !== symbol ? 'GA returned a set for an unknown or different chord' :
-    !parsed.forte || !/^<\s*\d+(?:\s+\d+){5}\s*>$/.test(parsed.icv) || !/^(?:[0-9]|10|11|T|E)(?:\s+(?:[0-9]|10|11|T|E))*$/.test(parsed.prime)
+    !usableSet({ ...parsed, error: '', refused: false })
       ? 'GA returned no usable chord-set data' : '')
   const info: ChordSet = error ? { forte: '', icv: '', prime: '', modal: '', error, refused: r.refused } :
     { ...parsed, error: '', refused: false }

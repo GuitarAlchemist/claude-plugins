@@ -20,7 +20,7 @@ const ADVICE = "GA's voicing index: the permission check refused the mod's call 
 
 function engine(
   on: On,
-  { rules = true, placed = true, gaError = '', answer = SEARCH, setRefused = false, answers = {} as Record<string, string>, gate = (_query: string) => Promise.resolve() } = {},
+  { rules = true, placed = true, gaError = '', answer = SEARCH, setRefused = false, answers = {} as Record<string, string>, gate = (_query: string) => Promise.resolve(), setAnswer = (_symbol: string) => SET } = {},
 ): World {
   const world: World = { searches: [], sets: [], consents: [], opened: [], shown: [], rules }
   let now = Date.UTC(2026, 9, 4, 20, 0)
@@ -52,7 +52,7 @@ function engine(
     world.sets.push(String(args['symbol']))
     // `setRefused`: the set call refused while the search runs (the classifier judges each call apart).
     const refusal = judged('mcp__ga__ga_chord_to_set', args) || (setRefused ? NO_VERDICT('mcp__ga__ga_chord_to_set') : '')
-    return refusal ? { deny: refusal } : { result: SET }
+    return refusal ? { deny: refusal } : { result: setAnswer(String(args['symbol'])) }
   })
   return world
 }
@@ -484,15 +484,9 @@ const G7_PINNED_SET = [
 ].join('\n')
 
 test('known shell labels normalize to GA symbols while their displayed names are preserved', async ($, on) => {
-  const world = engine(on)
-  on('tool.call', { tool: /^mcp__ga__ga_chord_to_set$/ }, (_$, e) => {
-    const symbol = String({ ...e }['symbol'])
-    world.sets.push(symbol)
-    const result = symbol === 'G7' ? G7_PINNED_SET :
+  const world = engine(on, { setAnswer: symbol => symbol === 'G7' ? G7_PINNED_SET :
       symbol === 'Bb7' ? G7_PINNED_SET.replace('Chord: G7', 'Chord: Bb7').replace('{D, F, G, B}', '{D, F, Ab, Bb}') :
-      "Error: could not parse chord '" + symbol + "'"
-    return { result }
-  })
+      "Error: could not parse chord '" + symbol + "'" })
   const g7 = JSON.stringify(await $.tool.call({ tool: 'mcp__ga-chatbot__chord_diagram', chord: 'G7', ladder: true, ga_voicings: G7_SHELLS } as never))
   expect(world.sets).toEqual(['G7'])
   expect(g7).toContain('G7(shell)/B')
@@ -509,12 +503,8 @@ test('known shell labels normalize to GA symbols while their displayed names are
 })
 
 test('text errors, empty replies and missing set data are shown and never cached as successes', async ($, on) => {
-  const world = engine(on)
   const answers = ["Error: could not parse chord 'G7(shell)'", '', 'Chord: G7\nPitch set: {}', G7_PINNED_SET]
-  on('tool.call', { tool: /^mcp__ga__ga_chord_to_set$/ }, (_$, e) => {
-    world.sets.push(String({ ...e }['symbol']))
-    return { result: answers.shift() ?? G7_PINNED_SET }
-  })
+  const world = engine(on, { setAnswer: () => answers.shift() ?? G7_PINNED_SET })
   for (const expected of ['Error: could not parse', 'unknown or different chord', 'no usable chord-set data', 'Forte 4-27']) {
     const output = JSON.stringify(await $.tool.call({ tool: 'mcp__ga-chatbot__chord_diagram', chord: 'G7', ladder: true, ga_voicings: G7_SHELLS } as never))
     expect(output).toContain(expected)
@@ -534,6 +524,23 @@ test('a provided ga_set text error is reported without becoming a reusable succe
   expect(world.sets).toEqual(['G7'])
 })
 
+test('an inherited empty chord-set cache entry is queried again and replaced', async ($, on) => {
+  const world = engine(on, { setAnswer: () => G7_PINNED_SET })
+  let firstRead = true
+  on('state.get', (_$, e, next) => {
+    if ({ ...e }['key' as never] === 'sets' && firstRead) {
+      firstRead = false
+      return { value: { value: { G7: { forte: '', icv: '', prime: '', modal: '', error: '', refused: false } }, version: 1 } } as never
+    }
+    return next(e)
+  })
+  for (let i = 0; i < 2; i++) {
+    const output = JSON.stringify(await $.tool.call({ tool: 'mcp__ga-chatbot__chord_diagram', chord: 'G7', ladder: true, ga_voicings: G7_SHELLS } as never))
+    expect(output).toContain('Forte 4-27')
+  }
+  expect(world.sets).toEqual(['G7'])
+})
+
 test('normalization keeps legitimate slash qualities and omission notation', async ($, on) => {
   const world = engine(on)
   for (const name of ['C6/9', 'C(no 3)']) {
@@ -544,12 +551,8 @@ test('normalization keeps legitimate slash qualities and omission notation', asy
 })
 
 test('the pinned GA pitch-class notation T and E is accepted in a valid prime form', async ($, on) => {
-  const world = engine(on)
+  const world = engine(on, { setAnswer: () => 'Chord: 12-1\nPitch set: chromatic\nICV: <12 12 12 12 12 6>\nForte: 12-1\nPrime form: 0 1 2 3 4 5 6 7 8 9 T E' })
   const sample = { ...JSON.parse(SEARCH), results: [{ ...JSON.parse(SEARCH).results[0], chordName: '12-1' }] }
-  on('tool.call', { tool: /^mcp__ga__ga_chord_to_set$/ }, (_$, e) => {
-    world.sets.push(String({ ...e }['symbol']))
-    return { result: 'Chord: 12-1\nPitch set: chromatic\nICV: <12 12 12 12 12 6>\nForte: 12-1\nPrime form: 0 1 2 3 4 5 6 7 8 9 T E' }
-  })
   const output = JSON.stringify(await $.tool.call({
     tool: 'mcp__ga-chatbot__chord_diagram', chord: '12-1', ladder: true, ga_voicings: JSON.stringify(sample),
   } as never))
