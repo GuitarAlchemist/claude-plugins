@@ -1,0 +1,91 @@
+name: Claude manual HEAD review
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Same-repository open PR number
+        required: true
+        type: string
+      expected_head:
+        description: Exact lowercase 40-character HEAD SHA
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: claude-review-${{ inputs.pr_number }}
+  cancel-in-progress: false
+env:
+  TARGET_NUMBER: ${{ inputs.pr_number }}
+  EXPECTED_SHA: ${{ inputs.expected_head }}
+jobs:
+  review:
+    if: vars.CLAUDE_REVIEW_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - id: input
+        name: Validate trusted dispatcher and bounded immutable diff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/claude_pilot.py prepare-review
+      - id: cli
+        name: Pin Claude CLI before injecting subscription credential
+        run: |
+          npm install -g @anthropic-ai/claude-code@2.1.293
+          echo "path=$(command -v claude)" >> "$GITHUB_OUTPUT"
+      - id: claude
+        name: Tool-free single-pass subscription review
+        uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # verified v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}
+          path_to_claude_code_executable: ${{ steps.cli.outputs.path }}
+          prompt: ${{ steps.input.outputs.prompt }}
+          show_full_output: false
+          display_report: false
+          classify_inline_comments: false
+          claude_args: >-
+            --safe-mode --tools= --disallowedTools 'mcp__*'
+            --strict-mcp-config --mcp-config '{"mcpServers":{}}'
+            --max-turns 1 --disable-slash-commands --no-session-persistence
+            --json-schema '{"type":"object","additionalProperties":false,"required":["tldr","verdict","checklist"],"properties":{"tldr":{"type":"string","maxLength":1500},"verdict":{"enum":["no_findings","changes_requested","inconclusive"]},"checklist":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["evidence","result"],"properties":{"evidence":{"type":"string","maxLength":1500},"result":{"type":"string","maxLength":1500}}}}}}'
+      - name: Validate report without printing transcript
+        env:
+          STRUCTURED_OUTPUT: ${{ steps.claude.outputs.structured_output }}
+        run: python3 scripts/claude_pilot.py capture-review
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # Node 24
+        with:
+          name: review-${{ github.run_id }}
+          path: |
+            .pilot/meta.json
+            .pilot/report.json
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: error
+  comment:
+    needs: review
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # Node 24
+        with:
+          name: review-${{ github.run_id }}
+          path: .pilot
+      - name: Recheck permission and current HEAD then post COMMENT
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/claude_pilot.py post-review

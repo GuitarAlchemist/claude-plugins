@@ -2,11 +2,12 @@
 
 Reads, and never writes:
   - ~/.agents/claims.jsonl: the latest claim per (repo, lane) in the window;
-  - the open pull requests of the GitHub organisation, with their CI and review state (gh);
+  - the open pull requests of the GitHub organisation, and of the repos named with --repo, with
+    their CI and review state (gh);
   - the session digests (state/digests/latest.md) written in the window, under the repos root.
 Live sessions are not here: the model lists them itself (ListAgents).
 
-    python snapshot.py [--hours 24] [--org GuitarAlchemist] [--repos-root ~/source/repos]
+    python snapshot.py [--hours 24] [--org GuitarAlchemist] [--repo OWNER/NAME ...] [--repos-root ~/source/repos]
 """
 import argparse
 import json
@@ -16,6 +17,8 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 
 ACTIVE = {"claimed", "in-progress", "pr-open"}
+# Learn lives outside the organisation, so it is named here; --repo replaces this list.
+EXTRA_REPOS = ["spareilleux/learn"]
 FAILED = {"FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"}
 
 
@@ -100,13 +103,23 @@ def ci(rollup):
     return "pass"
 
 
-def prs(org, now):
+def org_repos(org):
+    """The organisation's unarchived repos with an open pull request, read from the repos themselves:
+    the search index lags, and a repo whose only pull request it has not indexed yet would be missed."""
+    q = ("query($org:String!){organization(login:$org){repositories(first:100,isArchived:false){"
+         "totalCount nodes{nameWithOwner pullRequests(states:OPEN){totalCount}}}}}")
+    found = gh(["api", "graphql", "-f", f"query={q}", "-F", f"org={org}"])["data"]["organization"]["repositories"]
+    names = [r["nameWithOwner"] for r in found["nodes"] if r["pullRequests"]["totalCount"]]
+    return names, found["totalCount"] > len(found["nodes"])
+
+
+def prs(org, extra, now):
     try:
-        found = gh(["search", "prs", "--owner", org, "--state", "open", "--limit", "200",
-                    "--json", "repository"])
-    except (RuntimeError, OSError) as e:
+        repos, truncated = org_repos(org)
+    except (RuntimeError, OSError, KeyError, TypeError) as e:
         return [f"_Pull requests unavailable: {e}_"]
-    repos = sorted({p["repository"]["nameWithOwner"] for p in found})
+    repos = sorted(set(repos) | set(extra))
+    count, listed = 0, set()
     out = ["| repo | PR | title | draft | CI | review | updated |", "| --- | --- | --- | --- | --- | --- | --- |"]
     for repo in repos:
         try:
@@ -115,12 +128,18 @@ def prs(org, now):
         except (RuntimeError, OSError) as e:
             out.append(f"| {repo} | ? | _unavailable: {e}_ | | | | |")
             continue
+        count += len(rows)
+        if rows:
+            listed.add(repo)
         for p in sorted(rows, key=lambda p: p["updatedAt"], reverse=True):
             t = when(p["updatedAt"])
             out.append(f"| {repo.split('/')[-1]} | #{p['number']} | {one_line(p['title'], 70).replace('|', '/')} | "
                        f"{'yes' if p['isDraft'] else ''} | {ci(p.get('statusCheckRollup'))} | "
                        f"{(p.get('reviewDecision') or '').lower().replace('_', ' ')} | {ago(t, now)} ago |")
-    return [f"{len(found)} open pull requests in {len(repos)} repos.", ""] + out
+    head = [f"{count} open pull requests in {len(listed)} repos."]
+    if truncated:
+        head.append(f"_Only the first 100 repositories of {org} were read._")
+    return head + [""] + out
 
 
 def digests(root, cut, now):
@@ -150,15 +169,17 @@ def main():
     ap.add_argument("--hours", type=float, default=24)
     ap.add_argument("--stale-hours", type=float, default=12)
     ap.add_argument("--org", default="GuitarAlchemist")
+    ap.add_argument("--repo", action="append", help=f"a repo outside the organisation (repeatable; default {EXTRA_REPOS})")
     ap.add_argument("--repos-root", default=os.path.join(os.path.expanduser("~"), "source", "repos"))
     a = ap.parse_args()
+    extra = EXTRA_REPOS if a.repo is None else [r for r in a.repo if r]
     now = datetime.now(timezone.utc)
     cut = now - timedelta(hours=a.hours)
     print(f"# Fleet snapshot, {now:%Y-%m-%d %H:%M} UTC, last {a.hours:g} h\n")
     print("## Claimed lanes (~/.agents/claims.jsonl)\n")
     print("\n".join(claims(now, cut, a.stale_hours)))
-    print(f"\n## Open pull requests ({a.org})\n")
-    print("\n".join(prs(a.org, now)))
+    print(f"\n## Open pull requests ({', '.join([a.org, *extra])})\n")
+    print("\n".join(prs(a.org, extra, now)))
     print(f"\n## Session digests ({a.repos_root})\n")
     print("\n".join(digests(a.repos_root, cut, now)))
 

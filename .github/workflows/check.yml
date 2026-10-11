@@ -20,6 +20,12 @@ jobs:
           node-version: 22
       # The same CLI the plugins are written against; bump it on purpose, not by drift.
       - run: npm install -g @anthropic-ai/claude-code@2.1.293
+      - name: Install policy-test inspection dependency
+        run: python3 -m pip install PyYAML==6.0.3
+      - name: Check manual pilot policy and artifact boundaries
+        run: python3 scripts/test_claude_pilot.py
+      - name: Check action and SDK forwarding without Claude calls
+        run: python3 scripts/test_claude_action_args.py --verify-cli
       - name: Check the marketplace and its plugins
         env:
           BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
