@@ -20,8 +20,10 @@ python "<this skill's base directory>/scripts/snapshot.py" --hours 24
 ```
 
 Options: `--hours` (the window, 24 by default), `--stale-hours` (an active lane
-quieter than this is flagged, 12), `--org` (GuitarAlchemist), `--repos-root`
-(`~/source/repos`, where the session digests are looked for).
+quieter than this is flagged, 12), `--org` (GuitarAlchemist), `--repo`
+(a repo outside the organisation, repeatable; `spareilleux/learn` by default, and
+`--repo ""` lists none), `--repos-root` (`~/source/repos`, where the session
+digests are looked for).
 
 It prints three sections: the latest claim per lane from `~/.agents/claims.jsonl`,
 every open pull request with its CI (failing checks named, since a failing check
