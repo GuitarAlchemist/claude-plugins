@@ -214,8 +214,9 @@ export function stopTargets(text: string, binaries: readonly string[] = []): Sto
     if (/^(?:pkill|killall)$/.test(cmd) && /[$`]/.test(args) ||
       cmd === 'taskkill' && /\/IM\s+(?:[^\n;]*[$`])/i.test(args)) unverified = true
     if (/^(?:stop-process|spps)$/.test(cmd)) {
-      const id = args.match(/(?:^|\s)-(?:Id|PID)\b\s*([\s\S]*?)(?=\s+-[A-Za-z]|$)/i)
-      const positional = !args.startsWith('-') ? args.split(/\s+-[A-Za-z]/)[0] : undefined
+      const selectors = args.replace(/(?:^|\s)-(?:Force|PassThru|WhatIf|Confirm|Verbose|Debug)(?=\s|$)/gi, ' ').trim()
+      const id = selectors.match(/(?:^|\s)-(?:Id|PID)\b\s*([\s\S]*?)(?=\s+-[A-Za-z]|$)/i)
+      const positional = !selectors.startsWith('-') ? selectors.split(/\s+-[A-Za-z]/)[0] : undefined
       const list = id?.[1] ?? positional
       if (list !== undefined && list.trim()) {
         for (const operand of list.split(/[\s,]+/).filter(Boolean)) {
@@ -224,10 +225,11 @@ export function stopTargets(text: string, binaries: readonly string[] = []): Sto
           else unverified = true
         }
       } else if (id || /-InputObject\b/i.test(args)) unverified = true
-      const name = args.match(/(?:^|\s)-Name\s+("[^"]*"|'[^']*'|[^\s]+)/i)?.[1]
-      if (name && /[$`]/.test(name)) unverified = true
+      const name = selectors.match(/(?:^|\s)-Name\s+("[^"]*"|'[^']*'|[^\s]+)/i)?.[1]
+      if (name && /[$`,*?]/.test(name)) unverified = true
+      if (selectors && list === undefined && !name) unverified = true
       // A bare pipeline stop is supported only when Get-Process names literal targets.
-      if (!args && !/Get-Process\s+-(?:Id\s+\d+(?:\s*,\s*\d+)*|Name\s+['"]?[\w.*-]+['"]?)\s*\|\s*Stop-Process\b/i.test(text)) unverified = true
+      if (!selectors && !/Get-Process\s+-Id\s+\d+(?:\s*,\s*\d+)*\s*\|\s*Stop-Process\b/i.test(text)) unverified = true
     }
     if (cmd === 'taskkill' && /\/PID/i.test(args)) {
       const operands = [...args.matchAll(/(?:^|\s)\/PID\s+("[^"]*"|'[^']*'|[^\s]+)/gi)]
@@ -247,7 +249,7 @@ export function stopTargets(text: string, binaries: readonly string[] = []): Sto
       }
     }
   }
-  for (const m of text.matchAll(/Get-Process\s+-Id\s+(\d+)[^\n;]*\|\s*Stop-Process/gi)) add(m[1] ?? '')
+  for (const m of text.matchAll(/Get-Process\s+-Id\s+(\d+(?:\s*,\s*\d+)*)[^\n;]*\|\s*Stop-Process/gi)) add(m[1] ?? '')
   const named = [...text.matchAll(/(?:(?:Stop-Process|spps|Get-Process)\b[^\n;|]*-Name|taskkill\b[^\n;|]*\/IM)\s+(?:"([^"]+)"|'([^']+)'|([^\s;|]+))/gi)]
     .map(m => (m[1] ?? m[2] ?? m[3] ?? '').toLowerCase().replace(/\.exe$/i, ''))
   const configuredName = binaries.some(binary => {

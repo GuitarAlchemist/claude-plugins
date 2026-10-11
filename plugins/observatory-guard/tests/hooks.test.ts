@@ -419,11 +419,11 @@ test('directory changes before a relative source never validate the initial proj
 
 test('all literal stop PIDs include a protected target after the first operand', async ($, on) => {
   const f = configuredDemoFixture(on)
-  for (const command of ['taskkill /PID 111 /PID 777 /F', 'kill 111 777']) {
+  for (const command of ['taskkill /PID 111 /PID 777 /F', 'kill 111 777', 'Get-Process -Id 111,777 | Stop-Process']) {
     const out = await $.tool.call({ tool: 'PowerShell', command })
     expect(String(out.deny)).toMatch(/stop-demo/)
   }
-  expect(f.asks()).toBe(2)
+  expect(f.asks()).toBe(3)
   expect(f.ran()).toBe(false)
 })
 
@@ -521,9 +521,29 @@ test('deep shell wrappers are refused when their executed code cannot be fully i
   expect(f.queries.length).toBe(0)
 })
 
+test('PowerShell switches before positional PIDs still protect the demo', async ($, on) => {
+  const f = configuredDemoFixture(on)
+  for (const command of ['Stop-Process -Force 777', 'spps -PassThru 111,777']) {
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/stop-demo/)
+  }
+  expect(f.ran()).toBe(false)
+  expect(f.asks()).toBe(2)
+})
+
+for (const command of ['Stop-Process -Name other,godot', "Stop-Process -Name '*'"]) {
+  test('unresolved PowerShell name selectors are refused: ' + command, async ($, on) => {
+    const f = configuredDemoFixture(on)
+    const out = await $.tool.call({ tool: 'PowerShell', command })
+    expect(String(out.deny)).toMatch(/stop-unverified/)
+    expect(f.ran()).toBe(false)
+    expect(f.queries.length).toBe(0)
+  })
+}
+
 test('dynamic PowerShell process targets are refused before queries or shell execution', async ($, on) => {
   const f = configuredDemoFixture(on)
-  for (const command of ['Stop-Process -Id $pid', 'Stop-Process -Id 111,$pid -Force', 'spps 111,$pid', 'Stop-Process -Id $p.Id -Force', 'taskkill /IM $name /F', 'pkill $name', 'killall $name']) {
+  for (const command of ['Stop-Process -Id $pid', 'Stop-Process -Id 111,$pid -Force', 'spps 111,$pid', 'Stop-Process -Id $p.Id -Force', 'taskkill /IM $name /F', 'pkill $name', 'killall $name', 'Stop-Process -Force $pid', 'spps -PassThru $pid']) {
     const out = await $.tool.call({ tool: 'PowerShell', command })
     expect(String(out.deny)).toMatch(/stop-unverified/)
   }
