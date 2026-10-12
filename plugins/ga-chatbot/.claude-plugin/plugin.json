@@ -1,0 +1,7 @@
+{
+  "name": "ga-chatbot",
+  "version": "0.2.18",
+  "description": "Guitar Alchemist in panes: the chatbot (local GaChatbot.Api), ASCII chord diagrams from GA's offline voicing index, and the OPTIC-K ladder of any voicing, checked against GA's set theory",
+  "author": { "name": "Stephane Pareilleux" },
+  "types": "./types/index.d.ts"
+}

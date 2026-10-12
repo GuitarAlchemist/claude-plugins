@@ -209,7 +209,29 @@ async function refreshPrs($: EngineInterface): Promise<void> {
             errors.push(`${repo}: ${(r.stderr.trim().split('\n')[0] ?? 'gh failed').slice(0, 100)}`)
             return
           }
-          for (const p of JSON.parse(r.stdout) as GhPr[]) rows.push(toRow(repo, p))
+          const listed = JSON.parse(r.stdout) as GhPr[]
+          if (listed.length) {
+            try {
+              const [owner, name] = repo.split('/')
+              // One bounded query per repository. Missing/truncated/stale evidence stays unknown.
+              const query = `query { repository(owner: "${owner}", name: "${name}") { pullRequests(first: 100, states: OPEN, orderBy: {field: UPDATED_AT, direction: DESC}) { nodes { number headRefOid reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved } } } } } }`
+              const review = await $.process.run(['gh', 'api', 'graphql', '-f', `query=${query}`], { timeoutMs: 30_000 })
+              if (review.exitCode === 0) {
+                const data = JSON.parse(review.stdout)
+                for (const p of listed) {
+                  const found = data.data?.repository?.pullRequests?.nodes?.find((n: {number: number}) => n.number === p.number)
+                  const threads = found?.reviewThreads
+                  if (Array.isArray(threads?.nodes) && typeof threads.pageInfo?.hasNextPage === 'boolean') {
+                    p.reviewThreads = { head: found.headRefOid, complete: !threads.pageInfo.hasNextPage,
+                      unresolved: threads.nodes.filter((t: {isResolved?: boolean}) => t.isResolved !== true).length }
+                  }
+                }
+              } else errors.push(`${repo}: review threads unavailable; readiness unknown`)
+            } catch {
+              errors.push(`${repo}: review threads unavailable; readiness unknown`)
+            }
+          }
+          for (const p of listed) rows.push(toRow(repo, p))
         } catch (err) {
           errors.push(`${repo}: ${String(err instanceof Error ? err.message : err).slice(0, 100)}`)
         }
@@ -289,7 +311,7 @@ export const register: Register = on => {
       }
       lines.push(
         <Box key={`row-${id}`}>
-          <Text color={COLOR[r.ci]}>{GLYPH[r.ci]} </Text>
+          <Text color={COLOR[r.ci]}>CI {GLYPH[r.ci]} </Text>
           <Link href={r.url} label={`#${r.number}`} />
           <Text dimColor>{r.mergeable === 'CONFLICTING' ? ' conflict' : r.isDraft ? ' draft' : ''} </Text>
           <Button
@@ -313,7 +335,7 @@ export const register: Register = on => {
             {'   '}failing: {r.failing.length ? r.failing.join(', ') : 'none'}
           </Text>,
           <Text key={`d3-${id}`} dimColor wrap="truncate-end">
-            {'   '}pending: {r.pending.length ? r.pending.join(', ') : 'none'} · passed: {r.passed}
+            {'   '}pending: {r.pending.length ? r.pending.join(', ') : 'none'} · passed: {r.passed} · unresolved reviews: {r.unresolvedReviews ?? 'unknown'}
           </Text>,
         )
       }
@@ -347,7 +369,7 @@ export const register: Register = on => {
           </Text>
         ))}
         {shown.length === 0 && m.readAt !== '' && (
-          <Text dimColor>{onlyTodo ? 'Nothing needs attention: every CI is green.' : 'No open PRs.'}</Text>
+          <Text dimColor>{onlyTodo ? 'No CI/review alerts. Dependencies and merge authorization still need verification.' : 'No open PRs.'}</Text>
         )}
         {lines}
         {hidden > 0 && <Text dimColor>… and {hidden} more (enlarge the pane, or show only what needs attention)</Text>}
