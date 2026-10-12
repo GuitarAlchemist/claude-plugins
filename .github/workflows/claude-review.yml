@@ -54,7 +54,7 @@ jobs:
           claude_args: >-
             --safe-mode --tools= --disallowedTools 'mcp__*'
             --strict-mcp-config --mcp-config '{"mcpServers":{}}'
-            --max-turns 1 --disable-slash-commands --no-session-persistence
+            --max-turns 2 --disable-slash-commands --no-session-persistence
             --json-schema '{"type":"object","additionalProperties":false,"required":["tldr","verdict","checklist"],"properties":{"tldr":{"type":"string","maxLength":1500},"verdict":{"enum":["no_findings","changes_requested","inconclusive"]},"checklist":{"type":"array","minItems":1,"maxItems":12,"items":{"type":"object","additionalProperties":false,"required":["evidence","result"],"properties":{"evidence":{"type":"string","maxLength":1500},"result":{"type":"string","maxLength":1500}}}}}}'
       - name: Validate report without printing transcript
         env:

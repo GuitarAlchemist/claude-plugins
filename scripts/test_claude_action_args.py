@@ -22,6 +22,8 @@ ACTION = '1d6de8cb0c237e7c15e9e1bdf973826ebae490cc'
 CLI = '2.1.293'
 PARSER_URL = f'https://raw.githubusercontent.com/anthropics/claude-code-action/{ACTION}/base-action/src/parse-sdk-options.ts'
 PARSER_SHA256 = 'b42cc8daa1d15fb00321784cec375b1c855bb2e41bf03b37dfd462385f9e5548'
+RUNNER_URL = f'https://raw.githubusercontent.com/anthropics/claude-code-action/{ACTION}/base-action/src/run-claude-sdk.ts'
+RUNNER_SHA256 = '5890e7a00af10eb7b891f513081c972a6691a948dfa87fe62f3a7eeaa13ec892'
 PACKAGES = {
     'shell-quote': (
         'https://registry.npmjs.org/shell-quote/-/shell-quote-1.8.4.tgz',
@@ -126,6 +128,10 @@ def main():
         if hashlib.sha256(source).hexdigest() != PARSER_SHA256:
             raise ValueError('Integrity mismatch for pinned public action parser')
         (fixture_root / 'parse-sdk-options.ts').write_bytes(source)
+        runner = download(RUNNER_URL, 100_000)
+        if hashlib.sha256(runner).hexdigest() != RUNNER_SHA256:
+            raise ValueError('Integrity mismatch for pinned public action result guard')
+        (fixture_root / 'run-claude-sdk.ts').write_bytes(runner)
         for name in ['shell-quote', 'sdk']:
             extract_public_package(verified_package(name), fixture_root / name)
         cases = {

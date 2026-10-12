@@ -202,7 +202,10 @@ class PolicyTests(unittest.TestCase):
                     if job_name != model_job: self.assertNotIn('secrets.',json.dumps(step))
                     if step.get('uses','').startswith('anthropics/claude-code-action@'):
                         args=step['with']['claude_args']
-                        self.assertIn("--tools=",args); self.assertIn('--max-turns 1',args)
+                        self.assertIn("--tools=",args)
+                        import re
+                        expected_turns = '2' if model_job == 'review' else '1'
+                        self.assertEqual(re.findall(r'--max-turns\s+(\S+)', args), [expected_turns])
                         self.assertIn('--safe-mode',args); self.assertIn("--disallowedTools 'mcp__*'",args)
                         self.assertNotIn('anthropic_api_key',step['with'])
                         self.assertFalse(step['with']['show_full_output'])
