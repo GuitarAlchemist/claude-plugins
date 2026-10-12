@@ -13,7 +13,7 @@ The action's explicit `github_token: github.token` path is used. **No Claude Git
 
 Before any persistent access is configured, approve exactly this scope:
 
-1. Land these reviewed workflow files in the default branch of **GuitarAlchemist/claude-plugins**. PR3 contains the preparation; landing still requires human approval.
+1. Ensure the reviewed pilot workflows are present on the default branch of **GuitarAlchemist/claude-plugins** before dispatch. Preparing them on another branch does not enable the pilot; activation remains a separate approved step.
 2. Manually obtain a Claude Code subscription OAuth token through the official `claude setup-token` flow and enter it directly into that repository's masked Actions secret named **CLAUDE_CODE_OAUTH_TOKEN**. Do not paste it into chat, files, logs, or workflow inputs. No token has been read, generated, or transmitted during preparation. Subscription eligibility and organization policy must be checked at activation; no paid API credential is substituted.
 3. Set only the desired repository variable: **CLAUDE_REVIEW_ENABLED=true** and/or **CLAUDE_IMPLEMENT_ENABLED=true**. Missing/false leaves the respective workflow disabled. GitHub repository policy must permit Actions to create PRs for the implementation pilot; this setting has not been changed.
 4. Dispatch on the **default branch only**, supply the current exact lowercase SHA, and select a small trusted issue/plugin. A changed target or revoked writer access fails closed. No actor allowlist bypass is used. The collaborator-permission lookup must succeed with the repository policy; there is no fallback if access is denied.
