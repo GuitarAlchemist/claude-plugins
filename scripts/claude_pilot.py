@@ -10,6 +10,7 @@ import subprocess
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timezone
 
 REPO = 'GuitarAlchemist/claude-plugins'
 LIMIT = 80000
@@ -17,6 +18,11 @@ SCOPES = {'fleet', 'session-inbox', 'shared-repo-guard'}
 
 def number(value):
     if not re.fullmatch(r'[1-9][0-9]{0,8}', str(value)): raise ValueError('positive issue/PR number required')
+    return int(value)
+
+def github_resource_id(value):
+    if not re.fullmatch(r'[1-9][0-9]{0,18}', str(value)) or int(value) > 2**63 - 1:
+        raise ValueError('positive GitHub resource ID required')
     return int(value)
 
 def sha(value):
@@ -98,7 +104,9 @@ def api(path, data=None, method=None):
     if len(raw) > 2000000: raise ValueError('GitHub response exceeds pilot bound')
     return json.loads(raw)
 
-def repo_api(path, data=None, method=None): return api(f'repos/{REPO}/{path}', data, method)
+def repo_api(path, data=None, method=None):
+    endpoint = f'repos/{REPO}' + (f'/{path}' if path else '')
+    return api(endpoint, data, method)
 
 def check_writer(login):
     if not re.fullmatch(r'[A-Za-z0-9-]{1,39}', login): raise ValueError('invalid login')
@@ -172,6 +180,9 @@ def capture(mode):
     meta = load('.pilot/meta.json'); report = json.loads(os.environ['STRUCTURED_OUTPUT'])
     if mode == 'review': review_comment(report, meta['sha'])
     else: validate_proposal(report, meta['scope'])
+    # Producer metadata comes from the trusted job, never the model's claimed identity.
+    meta['analysis_completed_utc'] = datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
+    dump('.pilot/meta.json', meta)
     dump('.pilot/report.json',report)
     if mode == 'implement':
         # These job outputs are produced before candidate code executes and cannot
@@ -253,11 +264,63 @@ def test_proposal():
     digest=hashlib.sha256(Path('.pilot/report.json').read_bytes()).hexdigest()
     dump('.pilot/tested.json',{'report_sha256':digest,'source_sha256':source,'base':load('.pilot/meta.json')['sha'],'tests':'plugin validate + plugin test'})
 
+def utc_stamp(value):
+    if not isinstance(value, str) or not value.endswith('Z'):
+        raise ValueError('UTC provenance timestamp required')
+    try:
+        datetime.fromisoformat(value.replace('Z', '+00:00'))
+    except ValueError as error:
+        raise ValueError('invalid UTC provenance timestamp') from error
+    return value
+
+
+def provenance(meta, result, publication=None, published_sha=None):
+    account, published_at = None, None
+    if publication is not None:
+        account = publication.get('user', {}).get('login', '')
+        if not isinstance(account, str) or not re.fullmatch(r'[A-Za-z0-9-]{1,100}(?:\[bot\])?', account):
+            raise ValueError('GitHub publisher account unavailable')
+        published_at = utc_stamp(publication.get('submitted_at') or publication.get('created_at'))
+    kind = 'code-review' if meta['mode'] == 'review' else 'implementation-proposal'
+    scope = (f'Complete immutable diff {sha(meta["diff_base_sha"])}...{sha(meta["sha"])}; no PR code executed'
+             if kind == 'code-review' else f'plugins/{meta["scope"]}; implementation proposal, not independent review')
+    return {'kind': kind, 'analysis_agent': 'Claude Code', 'model': None,
+            'analysis_completed_utc': utc_stamp(meta.get('analysis_completed_utc')),
+            'dispatcher': meta['actor'], 'examined_sha': sha(meta['sha']),
+            'published_sha': sha(published_sha) if published_sha else None,
+            'run_url': f'https://github.com/{REPO}/actions/runs/{github_resource_id(meta["run_id"])}',
+            'scope': scope, 'result': result, 'publisher_account': account,
+            'published_at_utc': published_at, 'publication_url': publication.get('html_url') if publication else None}
+
+
+def provenance_text(receipt):
+    kind = 'Automated code review (COMMENT)' if receipt['kind'] == 'code-review' else 'Implementation proposal and candidate validation'
+    publisher = f'`{receipt["publisher_account"]}`' if receipt['publisher_account'] else 'pending GitHub response verification'
+    return '\n'.join(['', '## Provenance', f'Type: {kind}',
+        'Analysis agent: Claude Code (pinned GitHub Action)', 'Model: not attested',
+        f'Analysis completed UTC: {receipt["analysis_completed_utc"]}', f'Publisher account: {publisher}',
+        f'Published UTC: {receipt["published_at_utc"] or "pending GitHub response verification"}',
+        f'Dispatcher: `{receipt["dispatcher"]}`', f'Examined SHA: `{receipt["examined_sha"]}`',
+        f'Run: {receipt["run_url"]}', f'Scope: {receipt["scope"]}', f'Result: {receipt["result"]}'])
+
+
 def post_review():
     meta=load('.pilot/meta.json'); verify_meta(meta,'review')
-    body=review_comment(load('.pilot/report.json'),meta['sha'])+'\nImmutable comparison base: `'+meta['diff_base_sha']+'`; merge base: `'+meta['diff_merge_base_sha']+'`.'
+    report = load('.pilot/report.json')
+    body=review_comment(report,meta['sha'])+'\nImmutable comparison base: `'+meta['diff_base_sha']+'`; merge base: `'+meta['diff_merge_base_sha']+'`.'
+    pending = provenance(meta, report['verdict'])
     # COMMENT only. Never APPROVE, merge, run a PR script, or checkout its HEAD.
-    repo_api(f'pulls/{meta["number"]}/reviews',{'commit_id':meta['sha'],'body':body,'event':'COMMENT'})
+    created = repo_api(f'pulls/{meta["number"]}/reviews',{'commit_id':meta['sha'],'body':body+provenance_text(pending),'event':'COMMENT'})
+    if created.get('commit_id') != meta['sha']: raise ValueError('published review SHA mismatch')
+    review_id = github_resource_id(created.get('id', ''))
+    receipt = provenance(meta, report['verdict'], created)
+    # Finalize only this newly created review; historical coordination comments are untouched.
+    verify_meta(meta, 'review')
+    final_body = body + provenance_text(receipt)
+    updated = repo_api(f'pulls/{meta["number"]}/reviews/{review_id}', {'body': final_body}, 'PUT')
+    if updated.get('id') != created['id'] or updated.get('commit_id') != meta['sha'] or updated.get('body') != final_body or updated.get('user', {}).get('login') != receipt['publisher_account']:
+        raise ValueError('review attribution update unconfirmed')
+    dump('.pilot/published.json', receipt)
 
 def publish():
     verify_producer_artifacts()
