@@ -309,13 +309,14 @@ const pane = (surfaceId: string, state: string, sessionId: string) => ({
 })
 
 // A wmux that answers from `panes` and `screens`, and records every command it was given.
-function fakeWmux(on: On, panes: ReturnType<typeof pane>[], screens: Record<string, string>, failing = ''): string[][] {
+function fakeWmux(on: On, panes: ReturnType<typeof pane>[], screens: Record<string, string>, failing = '', envs: (Record<string, string> | undefined)[] = []): string[][] {
   const calls: string[][] = []
   on('process.run', (_$, e) => {
     const raw: unknown = e
     const argv = Array.isArray(raw) ? raw : ((raw as { argv?: string[]; command?: string[]; args?: string[] }).argv ?? (raw as { command?: string[] }).command ?? (raw as { args?: string[] }).args ?? [])
     const args = argv.slice(2).map(String)
     calls.push(args)
+    envs.push((raw as { init?: { env?: Record<string, string> } }).init?.env)
     const surface = args[args.indexOf('--surface') + 1] ?? ''
     const done = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } })
     if (failing && args[0] === failing) return { value: { exitCode: 1, stdout: '', stderr: 'pipe closed' } }
@@ -355,8 +356,43 @@ test('when the permission layer refuses the send, a post to everyone goes throug
   expect(world.attempts).toBe(1)
   expect(calls.filter(c => c[0] === 'send').map(c => c[2])).toEqual(['surf-a', 'surf-b'])
   expect(calls.find(c => c[0] === 'send')?.[3]).toBe(LINE.replace('this session', 'learn-vx'))
-  expect(r.text).toBe('Typed by wmux into 2 panes of fleet. 1 pane left alone (busy, or a draft in the editor): post again later for those.')
+  expect(r.text).toBe(
+    'Typed by wmux into 2 panes of fleet. 1 pane left alone (busy, or a draft in the editor): post again later for those. ' +
+      'ListAgents lists learn-17, music-7c, ga-c0, tars-60: wmux types only into the panes of this wmux, so one of them running elsewhere did not get the post.',
+  )
   expect(world.filled).toEqual([])
+})
+
+test('when the send is refused and wmux types into no pane, the live members still get the hand-over', async ($, on) => {
+  const world = engine(on, FLEET, LIST, CLASSIFIER, IN_WMUX)
+  fakeWmux(on, PANES, { 'surf-a': DRAFT_BOX, 'surf-b': DRAFT_BOX })
+
+  const r = await $.command.run(inbox('send fleet main is red'))
+
+  expect(r.text).toContain("wmux typed fleet's post into no pane.")
+  expect(r.text).toContain('The post and its recipients are in your prompt box')
+  expect(world.filled.length).toBe(1)
+  expect(world.filled[0]?.endsWith('[group fleet] main is red')).toBe(true)
+})
+
+test('when WMUX_NODE is wmux\'s own Electron binary, it is run as Node', async ($, on) => {
+  engine(on, FLEET, '', '', { ...IN_WMUX, WMUX_NODE_ELECTRON: '1' })
+  const asElectron: (Record<string, string> | undefined)[] = []
+  fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX }, '', asElectron)
+  await $.command.run(inbox('send fleet main is red'))
+
+  expect(asElectron.length).toBeGreaterThan(0)
+  expect(asElectron.every(e => e?.ELECTRON_RUN_AS_NODE === '1')).toBe(true)
+})
+
+test('a standalone Node is started with no variable of ours', async ($, on) => {
+  engine(on, FLEET, '', '', IN_WMUX)
+  const plain: (Record<string, string> | undefined)[] = []
+  fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX }, '', plain)
+  await $.command.run(inbox('send fleet main is red'))
+
+  expect(plain.length).toBeGreaterThan(0)
+  expect(plain.every(e => e?.ELECTRON_RUN_AS_NODE === undefined)).toBe(true)
 })
 
 test('wmux is never used for the model\'s group_send, for a group of named members, or outside a wmux pane', async ($, on) => {

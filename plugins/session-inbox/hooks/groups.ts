@@ -231,6 +231,7 @@ export const USAGE = [
   '/inbox hold | pass             hold messages here, or let them all through',
   '/inbox groups                  list the working groups and who is live in each',
   '/inbox send <group> <text>     send one message to every live member of a group',
+  '                               (to a group of everyone, from a wmux pane: typed into its idle panes when no send gets through)',
   '/inbox group create <id> [working-group|sub-group|community] [title]',
   '/inbox group join <id> [member]     add this session, or a name or pattern (learn-*)',
   '/inbox group leave <id> [member]',
@@ -359,6 +360,11 @@ export function editorIsEmpty(screen: string): boolean {
 // One line: a newline typed into a prompt box would submit the post half written.
 export function typedPost(id: string, sender: string, text: string): string {
   return `${tagged(id, text.replace(/\s+/g, ' '))} (posted by the user from ${sender || 'another session'} with /inbox send, typed here by wmux)`
+}
+
+// What a refused send leaves open once wmux has typed: the live members it had no way to recognise.
+export function listedElsewhere(names: string[]): string {
+  return `ListAgents lists ${names.join(', ')}: wmux types only into the panes of this wmux, so one of them running elsewhere did not get the post.`
 }
 
 export function typedReport(id: string, r: { typed: number; busy: number; shared: number; unknown: number }): string {

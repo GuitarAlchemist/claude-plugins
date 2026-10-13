@@ -14,6 +14,7 @@ import {
   groupsOf,
   handOver,
   isEveryone,
+  listedElsewhere,
   MODEL_SENDS,
   panesToType,
   parseCommand,
@@ -228,10 +229,13 @@ async function wmux($: EngineInterface): Promise<Wmux | undefined> {
   const self = await $.env.get('WMUX_SURFACE_ID')
   if (!cli || !self) return undefined
   const node = (await $.env.get('WMUX_NODE')) || 'node'
+  // WMUX_NODE may be wmux's own Electron binary, which is Node only under this variable: without it
+  // the command opens a second wmux window instead of running the CLI.
+  const env = (await $.env.get('WMUX_NODE_ELECTRON')) === '1' ? { ELECTRON_RUN_AS_NODE: '1' } : undefined
   return {
     self,
     run: async args => {
-      const r = await $.process.run([node, cli, ...args], { timeoutMs: 15_000 })
+      const r = await $.process.run([node, cli, ...args], env ? { timeoutMs: 15_000, env } : { timeoutMs: 15_000 })
       if (r.exitCode !== 0) throw new Error((r.stderr.trim().split('\n')[0] ?? '').slice(0, 120) || `wmux ${args[0]} failed`)
       return r.stdout
     },
@@ -337,8 +341,14 @@ async function sendToGroup($: EngineInterface, id: string, text: string, by: 'us
     }
   }
   if (refused) {
-    if (panes) return typeIntoPanes($, panes, group.id, body, self)
     const addresses = chosen.map(r => r.address)
+    // wmux cannot tell which of the listed members its panes are, so they are named when it typed
+    // and handed over as before when it typed nothing.
+    const typed = panes ? await typeIntoPanes($, panes, group.id, body, self) : undefined
+    if (typed?.ok) return { ...typed, text: `${typed.text} ${listedElsewhere(chosen.map(r => r.name))}` }
+    if (typed) {
+      return { ok: false, text: typed.text, handOver: handOver(group.id, addresses, message, refused, by) }
+    }
     return {
       ok: false,
       text: `The permission mode refused the plugin's send to ${addresses.join(', ')} (${refused}).`,
