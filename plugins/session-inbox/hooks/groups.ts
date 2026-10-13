@@ -275,3 +275,97 @@ export function handOver(group: string, addresses: readonly string[], message: s
     message,
   ].join('\n')
 }
+
+// Delivery through wmux, for a post the user typed to a group of everyone (`*`).
+//
+// Where the sessions are wmux panes, ListAgents may list no peer and the permission layer may refuse
+// the plugin's send, so such a post reaches nobody. wmux can type it into each pane instead. What is
+// typed arrives as the user's own prompt, not as a peer's message the inbox can hold: that is why
+// only the user's posts go this way, never the model's group_send, and why a pane is typed into only
+// when it is idle with an empty editor, once.
+
+export type Pane = { surface: string; session: string; isIdle: boolean }
+
+export function isEveryone(group: Group): boolean {
+  return group.members.includes('*')
+}
+
+// What `wmux agent-state` prints: `{ states: […] }`, or `{ state: {…} }` for one surface.
+export function parsePanes(json: string): Pane[] {
+  let raw: unknown
+  try {
+    raw = JSON.parse(json)
+  } catch {
+    return []
+  }
+  const o = raw && typeof raw === 'object' ? (raw as { states?: unknown; state?: unknown }) : {}
+  const list = Array.isArray(o.states) ? o.states : o.state && typeof o.state === 'object' ? [o.state] : []
+  const panes: Pane[] = []
+  for (const s of list) {
+    if (!s || typeof s !== 'object') continue
+    const p = s as Record<string, unknown>
+    if (typeof p['surfaceId'] !== 'string') continue
+    panes.push({
+      surface: p['surfaceId'],
+      session: typeof p['sessionId'] === 'string' ? p['sessionId'] : '',
+      isIdle: p['state'] === 'idle' && p['runDepth'] === 0 && !p['blockedReason'] && p['sessionProvider'] === 'claude',
+    })
+  }
+  return panes
+}
+
+// The panes to type into, this one left out. `shared` counts panes whose session id another pane
+// also reports: which of them holds the session is unknown, so neither is typed into.
+export function panesToType(panes: readonly Pane[], self: string): { chosen: string[]; busy: number; shared: number } {
+  const others = panes.filter(p => p.surface !== self)
+  const isShared = (p: Pane) => p.session !== '' && panes.filter(q => q.session === p.session).length > 1
+  return {
+    chosen: others.filter(p => p.isIdle && !isShared(p)).map(p => p.surface),
+    busy: others.filter(p => !p.isIdle && !isShared(p)).length,
+    shared: others.filter(isShared).length,
+  }
+}
+
+export function screenText(json: string): string {
+  try {
+    const raw: unknown = JSON.parse(json)
+    const text = raw && typeof raw === 'object' ? (raw as { text?: unknown }).text : undefined
+    return typeof text === 'string' ? text : ''
+  } catch {
+    return ''
+  }
+}
+
+const PROMPT_LINE = /^\s*[>\u276f]\s?(.*)$/
+const BOX_EDGE = /^\s*[\u2500\u2501]{5,}.*$/
+
+// Whether the prompt box at the bottom of a pane's screen holds nothing. A screen that does not
+// show the box, bottom edge included, is not empty: a draft must never be typed over on a guess.
+export function editorIsEmpty(screen: string): boolean {
+  const lines = screen.split(/\r?\n/)
+  let at = -1
+  lines.forEach((l, i) => {
+    if (PROMPT_LINE.test(l)) at = i
+  })
+  if (at < 0) return false
+  const draft = [PROMPT_LINE.exec(lines[at] ?? '')?.[1] ?? '']
+  for (const l of lines.slice(at + 1)) {
+    if (BOX_EDGE.test(l)) return draft.every(x => x.trim() === '')
+    draft.push(l)
+  }
+  return false
+}
+
+// One line: a newline typed into a prompt box would submit the post half written.
+export function typedPost(id: string, sender: string, text: string): string {
+  return `${tagged(id, text.replace(/\s+/g, ' '))} (posted by the user from ${sender || 'another session'} with /inbox send, typed here by wmux)`
+}
+
+export function typedReport(id: string, r: { typed: number; busy: number; shared: number; unknown: number }): string {
+  const s = (n: number) => `${n} pane${n === 1 ? '' : 's'}`
+  const parts = [r.typed ? `Typed by wmux into ${s(r.typed)} of ${id}.` : `wmux typed ${id}'s post into no pane.`]
+  if (r.busy) parts.push(`${s(r.busy)} left alone (busy, or a draft in the editor): post again later for those.`)
+  if (r.shared) parts.push(`${s(r.shared)} left alone (two panes report one session id).`)
+  if (r.unknown) parts.push(`${s(r.unknown)}: wmux did not confirm, and nothing is typed twice.`)
+  return parts.join(' ')
+}

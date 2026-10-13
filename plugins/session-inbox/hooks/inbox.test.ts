@@ -29,12 +29,12 @@ type World = { files: Map<string, string>; sent: { to: string; text: string }[];
 
 // `list` is what ListAgents answers; '' makes it refuse, as it may outside auto mode. `refuse`, when
 // set, is why every session.send fails.
-function engine(on: On, registry?: string, list = LIST, refuse = ''): World {
+function engine(on: On, registry?: string, list = LIST, refuse = '', env: Record<string, string> = {}): World {
   const world: World = { files: new Map(), sent: [], shown: [], asked: 0, attempts: 0, prompts: [], filled: [] }
   if (registry !== undefined) world.files.set(REGISTRY, registry)
   let now = Date.UTC(2026, 9, 4, 18, 0)
   on('clock.now', () => ({ value: (now += 1000) }))
-  on('env.get', (_$, e) => ({ value: e.name === 'USERPROFILE' ? HOME : undefined }))
+  on('env.get', (_$, e) => ({ value: e.name === 'USERPROFILE' ? HOME : env[e.name] }))
   // The engine may hand the path with either separator, and resolves it first: off Windows,
   // C:/Users/tester is not absolute, so it arrives under the working directory.
   const key = (path: string) => {
@@ -282,4 +282,112 @@ test('a recipient\'s refusal is not the permission layer\'s: every member is tri
   expect(world.attempts).toBe(3)
   expect(r.text).toBe('Delivered to nobody in ga. Not delivered: learn-17, music-7c, ga-c0: that session no longer exists.')
   expect(world.prompts).toEqual([])
+})
+
+// --- Delivery through wmux ----------------------------------------------------------------------
+
+const FLEET = JSON.stringify({
+  version: 1,
+  groups: [
+    { id: 'fleet', kind: 'working-group', title: 'Everyone', members: ['*'] },
+    { id: 'ga', kind: 'working-group', title: 'Guitar Alchemist', members: ['learn-*', 'music-7c'] },
+  ],
+})
+
+const IN_WMUX = { WMUX_CLI: 'C:/wmux/cli/wmux.js', WMUX_NODE: 'C:/node/node.exe', WMUX_SURFACE_ID: 'surf-me' }
+const EDGE = '─'.repeat(40)
+const EMPTY_BOX = `● done\n${EDGE}\n> \n${EDGE}\n  auto mode on`
+const DRAFT_BOX = `● done\n${EDGE}\n> half a sentence\n${EDGE}`
+
+const pane = (surfaceId: string, state: string, sessionId: string) => ({
+  surfaceId,
+  sessionId,
+  state,
+  runDepth: state === 'idle' ? 0 : 1,
+  blockedReason: null,
+  sessionProvider: 'claude',
+})
+
+// A wmux that answers from `panes` and `screens`, and records every command it was given.
+function fakeWmux(on: On, panes: ReturnType<typeof pane>[], screens: Record<string, string>, failing = ''): string[][] {
+  const calls: string[][] = []
+  on('process.run', (_$, e) => {
+    const raw: unknown = e
+    const argv = Array.isArray(raw) ? raw : ((raw as { argv?: string[]; command?: string[]; args?: string[] }).argv ?? (raw as { command?: string[] }).command ?? (raw as { args?: string[] }).args ?? [])
+    const args = argv.slice(2).map(String)
+    calls.push(args)
+    const surface = args[args.indexOf('--surface') + 1] ?? ''
+    const done = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } })
+    if (failing && args[0] === failing) return { value: { exitCode: 1, stdout: '', stderr: 'pipe closed' } }
+    if (args[0] === 'agent-state') {
+      return done(args.includes('--surface') ? JSON.stringify({ state: panes.find(p => p.surfaceId === surface) }) : JSON.stringify({ states: panes }))
+    }
+    if (args[0] === 'read-screen') return done(JSON.stringify({ text: screens[surface] ?? '' }))
+    return done('{"ok":true}')
+  })
+  return calls
+}
+
+const PANES = [pane('surf-me', 'working', 's0'), pane('surf-a', 'idle', 's1'), pane('surf-b', 'idle', 's2'), pane('surf-c', 'working', 's3')]
+const LINE = '[group fleet] main is red (posted by the user from this session with /inbox send, typed here by wmux)'
+
+test('with no live peer, /inbox send to a group of everyone is typed by wmux into each idle pane with an empty editor, once', async ($, on) => {
+  const world = engine(on, FLEET, '', '', IN_WMUX)
+  const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX, 'surf-b': DRAFT_BOX })
+
+  const r = await $.command.run(inbox('send fleet main is red'))
+
+  expect(calls.filter(c => c[0] === 'send' || c[0] === 'send-key')).toEqual([
+    ['send', '--surface', 'surf-a', LINE.replace('this session', 'another session')],
+    ['send-key', 'enter', '--surface', 'surf-a'],
+  ])
+  expect(r.text).toBe('Typed by wmux into 1 pane of fleet. 2 panes left alone (busy, or a draft in the editor): post again later for those.')
+  expect(world.attempts).toBe(0)
+  expect(world.filled).toEqual([])
+})
+
+test('when the permission layer refuses the send, a post to everyone goes through wmux instead of the hand-over', async ($, on) => {
+  const world = engine(on, FLEET, LIST, CLASSIFIER, IN_WMUX)
+  const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX, 'surf-b': EMPTY_BOX })
+
+  const r = await $.command.run(inbox('send fleet main is red'))
+
+  expect(world.attempts).toBe(1)
+  expect(calls.filter(c => c[0] === 'send').map(c => c[2])).toEqual(['surf-a', 'surf-b'])
+  expect(calls.find(c => c[0] === 'send')?.[3]).toBe(LINE.replace('this session', 'learn-vx'))
+  expect(r.text).toBe('Typed by wmux into 2 panes of fleet. 1 pane left alone (busy, or a draft in the editor): post again later for those.')
+  expect(world.filled).toEqual([])
+})
+
+test('wmux is never used for the model\'s group_send, for a group of named members, or outside a wmux pane', async ($, on) => {
+  const world = engine(on, FLEET, LIST, CLASSIFIER, IN_WMUX)
+  const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX, 'surf-b': EMPTY_BOX })
+
+  const byModel = JSON.stringify(await $.tool.call({ tool: 'mcp__session-inbox__group_send', group: 'fleet', message: 'note' } as never))
+  const named = await $.command.run(inbox('send ga lesson 9 is up'))
+
+  expect(byModel).toContain('Send it yourself with SendMessage')
+  expect(named.text).toContain('The post and its recipients are in your prompt box')
+  expect(calls).toEqual([])
+  expect(world.filled.length).toBe(1)
+})
+
+test('outside a wmux pane, a post to everyone keeps its old outcome', async ($, on) => {
+  engine(on, FLEET, '')
+  const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX })
+
+  const r = await $.command.run(inbox('send fleet main is red'))
+
+  expect(r.text).toBe('No live member of fleet besides this session (ListAgents lists 0 peers).')
+  expect(calls).toEqual([])
+})
+
+test('a pane wmux did not confirm is counted and never typed into twice; a wmux that cannot list types nothing', async ($, on) => {
+  engine(on, FLEET, '', '', IN_WMUX)
+  const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX, 'surf-b': EMPTY_BOX }, 'send-key')
+
+  const r = await $.command.run(inbox('send fleet main is red'))
+
+  expect(calls.filter(c => c[0] === 'send').map(c => c[2])).toEqual(['surf-a', 'surf-b'])
+  expect(r.text).toBe("wmux typed fleet's post into no pane. 1 pane left alone (busy, or a draft in the editor): post again later for those. 2 panes: wmux did not confirm, and nothing is typed twice.")
 })
