@@ -341,6 +341,7 @@ async function sendToGroup($: EngineInterface, id: string, text: string, by: 'us
         ok: false,
         text: `UNKNOWN delivery to ${r.address} (${why(err)}). Stopped; do not resend automatically. ` +
           `Confirmed delivered: ${delivered.join(', ') || 'none'}. ` +
+          `Confirmed not delivered: ${failed.map(f => `${f.name} (${f.reason})`).join(', ') || 'none'}. ` +
           `Pending, not attempted: ${pending.join(', ') || 'none'}. No handover or WMUX fallback was started.`,
         handOver: '',
       }

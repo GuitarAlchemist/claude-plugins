@@ -480,6 +480,23 @@ test('an accepted native send with a lost response stops as UNKNOWN without repl
   expect(calls).toEqual([])
 })
 
+test('UNKNOWN retains earlier confirmed refusals as well as pending recipients', async ($, on) => {
+  const world = engine(on, FLEET, LIST, '', IN_WMUX, (_to, _text, attempt) => {
+    if (attempt === 2) throw new Error('response lost')
+    return { isDelivered: false, reason: 'offline' }
+  })
+  const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX })
+  const result = await $.command.run(inbox('send fleet report-every-outcome'))
+  expect(result.text).toContain('UNKNOWN delivery to music-7c')
+  expect(result.text).toContain('Confirmed not delivered: learn-17 (offline).')
+  expect(result.text).toContain('Confirmed delivered: none.')
+  expect(result.text).toContain('Pending, not attempted: ga-c0, tars-60.')
+  expect(world.attempts).toBe(2)
+  expect(world.filled).toEqual([])
+  expect(world.prompts).toEqual([])
+  expect(calls).toEqual([])
+})
+
 test('UNKNOWN after a confirmed delivery preserves the confirmed and pending recipient reports', async ($, on) => {
   const receipts: string[] = []
   const world = engine(on, FLEET, LIST, '', IN_WMUX, (to, _text, attempt) => {
