@@ -4,6 +4,8 @@ import tempfile
 import unittest
 import json
 import os
+import io
+import urllib.error
 from unittest.mock import patch
 
 SPEC = importlib.util.spec_from_file_location('pilot', pathlib.Path(__file__).with_name('claude_pilot.py'))
@@ -11,6 +13,95 @@ p = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(p)
 
 class PolicyTests(unittest.TestCase):
+    def test_new_review_records_analysis_and_actual_publisher_provenance(self):
+        head, base = 'a' * 40, 'b' * 40
+        run_id, review_id = '38199256088', 5477186238
+        repo = 'https://api.github.com/repos/GuitarAlchemist/claude-plugins'
+        writes = []
+        pr = {'state': 'open', 'head': {'sha': head, 'repo': {'full_name': p.REPO}},
+              'base': {'sha': base, 'ref': 'main', 'repo': {'full_name': p.REPO}}}
+        responses = {repo: {'default_branch': 'main'}, repo + '/pulls/2': pr,
+                     repo + '/collaborators/writer/permission': {'permission': 'write'},
+                     'https://api.github.com/users/writer': {'type': 'User'}}
+        published = {'id': review_id, 'commit_id': head, 'submitted_at': '2026-10-12T03:00:00Z',
+                     'user': {'login': 'sonnet-reviewer[bot]'},
+                     'html_url': 'https://github.com/GuitarAlchemist/claude-plugins/pull/2#pullrequestreview-' + str(review_id)}
+        def github_http(request, timeout):
+            if request.data is not None:
+                writes.append((request.get_method(), request.full_url, json.loads(request.data)))
+                self.assertIn(request.full_url, [repo + '/pulls/2/reviews', repo + '/pulls/2/reviews/' + str(review_id)])
+                response = dict(published, body=json.loads(request.data)['body'])
+            else:
+                response = responses[request.full_url]
+            return io.BytesIO(json.dumps(response).encode())
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.getcwd()
+            try:
+                os.chdir(directory); pathlib.Path('.pilot').mkdir()
+                p.dump('.pilot/meta.json', {'mode': 'review', 'number': 2, 'sha': head, 'default': 'main',
+                       'actor': 'writer', 'run_id': run_id, 'diff_base_sha': base, 'diff_merge_base_sha': base})
+                report = {'tldr': 'Bounded review', 'verdict': 'no_findings',
+                          'checklist': [{'evidence': 'README.md:1', 'result': 'No issue found'}]}
+                env = {'GH_TOKEN': 'fixture-only', 'TARGET_NUMBER': '2', 'EXPECTED_SHA': head,
+                       'GITHUB_RUN_ID': run_id, 'GITHUB_ACTOR': 'writer', 'GITHUB_REF': 'refs/heads/main',
+                       'STRUCTURED_OUTPUT': json.dumps(report)}
+                with patch.dict(os.environ, env), patch.object(p.urllib.request, 'urlopen', side_effect=github_http):
+                    p.capture('review'); p.post_review()
+                body = writes[-1][2]['body']
+                for value in ['Analysis agent: Claude Code', 'Publisher account: `sonnet-reviewer[bot]`',
+                              'Dispatcher: `writer`', 'Model: not attested', 'Automated code review (COMMENT)',
+                              '2026-10-12T03:00:00Z', '/actions/runs/' + run_id, head, base, 'no_findings']:
+                    self.assertIn(value, body)
+                self.assertEqual([(method, url) for method, url, _ in writes],
+                                 [('POST', repo + '/pulls/2/reviews'), ('PUT', repo + '/pulls/2/reviews/' + str(review_id))])
+                receipt = p.load('.pilot/published.json')
+                self.assertEqual(receipt['publisher_account'], 'sonnet-reviewer[bot]')
+                self.assertEqual(receipt['examined_sha'], head)
+                self.assertIsNone(receipt['model'])
+            finally:
+                os.chdir(previous)
+
+    def test_review_preparation_reads_canonical_repository_metadata(self):
+        head, base = 'a' * 40, 'b' * 40
+        repo = 'https://api.github.com/repos/GuitarAlchemist/claude-plugins'
+        responses = {
+            repo: {'default_branch': 'main'},
+            repo + '/collaborators/writer/permission': {'permission': 'write'},
+            'https://api.github.com/users/writer': {'type': 'User'},
+            repo + '/git/ref/heads/main': {'object': {'sha': base}},
+            repo + '/pulls/2': {
+                'state': 'open', 'changed_files': 1,
+                'head': {'sha': head, 'repo': {'full_name': p.REPO}},
+                'base': {'sha': base, 'ref': 'main', 'repo': {'full_name': p.REPO}},
+            },
+            repo + '/compare/' + base + '...' + head: {
+                'base_commit': {'sha': base}, 'merge_base_commit': {'sha': base},
+                'status': 'ahead', 'commits': [{'sha': head}],
+                'files': [{'filename': 'README.md', 'patch': '@@ -0,0 +1 @@\n+hello', 'additions': 1, 'deletions': 0}],
+            },
+        }
+        def github_http(request, timeout):
+            if request.full_url not in responses:
+                raise urllib.error.HTTPError(request.full_url, 404, 'Not Found', {}, None)
+            return io.BytesIO(json.dumps(responses[request.full_url]).encode())
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory) / 'github-output'
+            previous = os.getcwd()
+            try:
+                os.chdir(directory)
+                env = {'GH_TOKEN': 'fixture-only', 'GITHUB_REPOSITORY': p.REPO,
+                       'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_REF': 'refs/heads/main',
+                       'GITHUB_ACTOR': 'writer', 'GITHUB_RUN_ID': '7', 'TARGET_NUMBER': '2',
+                       'EXPECTED_SHA': head, 'GITHUB_OUTPUT': str(output)}
+                with patch.dict(os.environ, env), patch.object(p.urllib.request, 'urlopen', side_effect=github_http):
+                    p.prepare('review')
+                meta = json.loads(pathlib.Path('.pilot/meta.json').read_text())
+                self.assertEqual(meta['sha'], head)
+                self.assertEqual(meta['diff_base_sha'], base)
+                self.assertIn('+hello', output.read_text())
+            finally:
+                os.chdir(previous)
+
     def test_positive_number_and_immutable_sha(self):
         self.assertEqual(p.number('12'), 12)
         for value in ['0', '-1', '1/../2', '1;echo x']:
@@ -111,7 +202,10 @@ class PolicyTests(unittest.TestCase):
                     if job_name != model_job: self.assertNotIn('secrets.',json.dumps(step))
                     if step.get('uses','').startswith('anthropics/claude-code-action@'):
                         args=step['with']['claude_args']
-                        self.assertIn("--tools=",args); self.assertIn('--max-turns 1',args)
+                        self.assertIn("--tools=",args)
+                        import re
+                        expected_turns = '2' if model_job == 'review' else '1'
+                        self.assertEqual(re.findall(r'--max-turns\s+(\S+)', args), [expected_turns])
                         self.assertIn('--safe-mode',args); self.assertIn("--disallowedTools 'mcp__*'",args)
                         self.assertNotIn('anthropic_api_key',step['with'])
                         self.assertFalse(step['with']['show_full_output'])
