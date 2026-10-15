@@ -38,7 +38,10 @@ const DIRECT = 'direct' // the pane's section for messages sent to this session 
 const MAX_POST = 2000
 const MAX_RECIPIENTS = 12
 const messages = atom({ plugin: 'session-inbox', key: 'messages' } as const, [])
-const mode = atom({ plugin: 'session-inbox', key: 'mode' } as const, 'hold')
+// Pass unless this session asked to hold. The mode is session state, back to its initial at every start
+// and resume: an initial of hold kept the messages of every session resumed after a crash until someone
+// came by to type /inbox pass, and sessions waiting on each other stopped hearing from one another.
+const mode = atom({ plugin: 'session-inbox', key: 'mode' } as const, 'pass')
 const opened = atom({ plugin: 'session-inbox', key: 'open' } as const, '')
 const replying = atom({ plugin: 'session-inbox', key: 'replying' } as const, '')
 const selfName = atom({ plugin: 'session-inbox', key: 'selfName' } as const, '')
@@ -116,7 +119,7 @@ async function reply($: EngineInterface, id: string, text: string): Promise<void
 async function setMode($: EngineInterface, next: 'hold' | 'pass'): Promise<string> {
   await update($, mode, () => next)
   return next === 'hold'
-    ? 'Messages from other sessions are held in /inbox (urgent ones, and groups set to pass, go straight through).'
+    ? 'Messages from other sessions are held in /inbox until this session ends (urgent ones, and groups set to pass, go straight through); held messages are not kept past it.'
     : 'Messages from other sessions go straight to the model; /inbox keeps a log of them.'
 }
 
@@ -372,7 +375,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'inbox',
-      description: 'Messages held from other sessions, and working groups: /inbox, /inbox groups, /inbox send <group> <text>, /inbox help',
+      description: 'Messages from other sessions, and working groups: /inbox, /inbox hold | pass, /inbox groups, /inbox send <group> <text>, /inbox help',
     })
     try {
       await $.tool.register({

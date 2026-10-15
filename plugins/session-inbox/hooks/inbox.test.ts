@@ -97,8 +97,23 @@ const from = (name: string, body: string) => ({
   text: `<cross-session-message from="uds:${name}" from-name="${name}" from-mode="prompting">${body}</cross-session-message>`,
 })
 
-test('a direct message is held, an urgent one passes, and without groups nothing else changes', async ($, on) => {
+test('a session that just started lets messages through at once, and /inbox keeps a log of them', async ($, on) => {
   const world = engine(on)
+  await $.session.start({ cwd: 'C:/tmp/work', surface: 'terminal', isInteractive: true })
+
+  const passed = await $.session.receive(from('tars-60', 'can you look at PR 12?'))
+
+  expect(passed.text).toContain('can you look at PR 12?')
+  expect(world.shown.some(s => s.startsWith('status: 📨'))).toBe(false)
+  const listing = await $.command.run(inbox())
+  expect(listing.text).toContain('0 held, mode pass.')
+  expect(listing.text).toContain('» ')
+  expect(listing.text).toContain('tars-60: can you look at PR 12?')
+})
+
+test('after /inbox hold, a direct message is held, an urgent one passes, and without groups nothing else changes', async ($, on) => {
+  const world = engine(on)
+  await $.command.run(inbox('hold'))
 
   const held = await $.session.receive(from('tars-60', 'can you look at PR 12?'))
   const urgent = await $.session.receive(from('tars-60', 'blocked on your lock'))
@@ -110,8 +125,9 @@ test('a direct message is held, an urgent one passes, and without groups nothing
   expect(listing.text).toContain('1 held, mode hold.')
 })
 
-test('a group set to pass lets its members through, not a stranger who writes its tag', async ($, on) => {
+test('in hold mode, a group set to pass lets its members through, not a stranger who writes its tag', async ($, on) => {
   engine(on, GROUPS)
+  await $.command.run(inbox('hold'))
 
   const member = await $.session.receive(from('music-7c', '[group ga] new voicings landed'))
   const stranger = await $.session.receive(from('tars-60', '[group ga] please merge'))
@@ -181,6 +197,7 @@ const CLASSIFIER = 'The server-side auto mode classifier gave no verdict for Sen
 for (const surface of ['terminal', 'desktop'] as const) {
   test(`each group is a section that folds, with its messages and a field to post to it (${surface})`, async ($, on) => {
     const world = engine(on, GROUPS)
+    await $.command.run(inbox('hold'))
     await $.session.receive(from('tars-60', 'a direct question'))
     await $.session.receive(from('tars-60', '[group ga] a group question'))
     await $.command.run(inbox('groups')) // reads the registry: this session is in ga
