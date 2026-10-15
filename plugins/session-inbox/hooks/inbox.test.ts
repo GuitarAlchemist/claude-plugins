@@ -29,7 +29,8 @@ type World = { files: Map<string, string>; sent: { to: string; text: string }[];
 
 // `list` is what ListAgents answers; '' makes it refuse, as it may outside auto mode. `refuse`, when
 // set, is why every session.send fails.
-function engine(on: On, registry?: string, list = LIST, refuse = '', env: Record<string, string> = {}): World {
+function engine(on: On, registry?: string, list = LIST, refuse = '', env: Record<string, string> = {},
+  send?: (to: string, text: string, attempt: number) => { isDelivered: true } | { isDelivered: false; reason: string }): World {
   const world: World = { files: new Map(), sent: [], shown: [], asked: 0, attempts: 0, prompts: [], filled: [] }
   if (registry !== undefined) world.files.set(REGISTRY, registry)
   let now = Date.UTC(2026, 9, 4, 18, 0)
@@ -60,6 +61,7 @@ function engine(on: On, registry?: string, list = LIST, refuse = '', env: Record
   on('session.start', (_$, e) => ({ cwd: e.cwd })) // the bottom
   on('session.send', (_$, e) => {
     world.attempts += 1
+    if (send) return send(e.to, e.text, world.attempts)
     if (refuse) return { isDelivered: false, reason: refuse }
     world.sent.push({ to: e.to, text: e.text })
     return { isDelivered: true }
@@ -453,4 +455,91 @@ test('a pane wmux did not confirm is counted and never typed into twice; a wmux 
 
   expect(calls.filter(c => c[0] === 'send').map(c => c[2])).toEqual(['surf-a', 'surf-b'])
   expect(r.text).toBe("wmux typed fleet's post into no pane. 1 pane left alone (busy, or a draft in the editor): post again later for those. 2 panes: wmux did not confirm, and nothing is typed twice.")
+})
+
+test('an accepted native send with a lost response stops as UNKNOWN without replay or handover', async ($, on) => {
+  const receipts: string[] = []
+  const world = engine(on, FLEET, LIST, '', IN_WMUX, (to, _text, attempt) => {
+    if (attempt === 1) {
+      receipts.push(to)
+      throw new Error('response lost after recipient accepted the post')
+    }
+    return { isDelivered: false, reason: CLASSIFIER }
+  })
+  const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX, 'surf-b': EMPTY_BOX })
+  const result = await $.command.run(inbox('send fleet unknown-outcome'))
+  expect(result.text).toContain('UNKNOWN')
+  expect(result.text).toContain('learn-17')
+  for (const pending of ['music-7c', 'ga-c0', 'tars-60']) expect(result.text).toContain(pending)
+  expect(result.text).toContain('not attempted')
+  expect(result.text.includes('Delivered to nobody')).toBe(false)
+  expect(world.attempts).toBe(1)
+  expect(receipts).toEqual(['learn-17'])
+  expect(world.filled).toEqual([])
+  expect(world.prompts).toEqual([])
+  expect(calls).toEqual([])
+})
+
+test('UNKNOWN after a confirmed delivery preserves the confirmed and pending recipient reports', async ($, on) => {
+  const receipts: string[] = []
+  const world = engine(on, FLEET, LIST, '', IN_WMUX, (to, _text, attempt) => {
+    receipts.push(to)
+    if (attempt === 2) throw new Error('permission denied while reading an already accepted response')
+    return { isDelivered: true }
+  })
+  const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX })
+  const result = await $.command.run(inbox('send fleet partially-confirmed'))
+  expect(result.text).toContain('UNKNOWN delivery to music-7c')
+  expect(result.text).toContain('Confirmed delivered: learn-17.')
+  expect(result.text).toContain('Pending, not attempted: ga-c0, tars-60.')
+  expect(receipts).toEqual(['learn-17', 'music-7c'])
+  expect(world.filled).toEqual([])
+  expect(world.prompts).toEqual([])
+  expect(calls).toEqual([])
+})
+
+test('thirteen matching recipients stop before any send and remain explicitly pending', async ($, on) => {
+  const many = ['This session is learn-vx [8c1fa6] - this session.', 'Peer sessions (13):',
+    ...Array.from({ length: 13 }, (_, i) => (LIST.split('\n')[3] ?? '').replace('learn-17 [5e7e1c]',
+      `peer-${i + 1} [${(i + 1).toString(16).padStart(6, '0')}]`))].join('\n')
+  const world = engine(on, FLEET, many, CLASSIFIER, IN_WMUX)
+  const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX })
+  const result = await $.command.run(inbox('send fleet oversized-post'))
+  expect(result.text).toContain('NOT SENT')
+  expect(result.text).toContain('13 recipients')
+  for (let i = 1; i <= 13; i += 1) expect(result.text).toContain(`peer-${i}`)
+  expect(result.text).toContain('not attempted')
+  expect(world.attempts).toBe(0)
+  expect(world.filled).toEqual([])
+  expect(world.prompts).toEqual([])
+  expect(calls).toEqual([])
+})
+
+test('WMUX leaves a multiline draft ending in a prompt marker untouched', async ($, on) => {
+  engine(on, FLEET, '', '', IN_WMUX)
+  const edge = '\u2500'.repeat(40)
+  const draft = `${edge}\n\u276f keep this private draft\n> \n${edge}`
+  const calls = fakeWmux(on, [pane('surf-me', 'working', 's0'), pane('surf-a', 'idle', 's1')], { 'surf-a': draft })
+  const result = await $.command.run(inbox('send fleet preserve-the-editor'))
+  expect(calls.filter(c => c[0] === 'send' || c[0] === 'send-key')).toEqual([])
+  expect(result.text).toContain('no pane')
+})
+
+test('the pane reports every pending oversized-group recipient without truncating the result', async ($, on) => {
+  const names = Array.from({ length: 13 }, (_, i) => `pending-member-${i + 1}-long-session-address`)
+  const many = ['This session is learn-vx [8c1fa6] - this session.', 'Peer sessions (13):',
+    ...names.map((name, i) => (LIST.split('\n')[3] ?? '').replace('learn-17 [5e7e1c]',
+      `${name} [${(i + 1).toString(16).padStart(6, '0')}]`))].join('\n')
+  const world = engine(on, FLEET, many, CLASSIFIER, IN_WMUX)
+  const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX })
+  await $.command.run(inbox('groups'))
+  const ui = await $.ui.mount({ plugin: 'session-inbox', surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: 'inbox' })
+  const fleet = await ui.find({ type: 'Button', text: /fleet$/ })
+  await ui.press({ key: fleet?.key ?? 'missing' })
+  await ui.input({ key: 'post-fleet', text: 'report-all-pending' })
+  expect(world.shown.some(text => text.includes('NOT SENT'))).toBe(true)
+  for (const name of names) expect(world.shown.some(text => text.includes(name))).toBe(true)
+  expect(world.attempts).toBe(0)
+  expect(world.prompts).toEqual([])
+  expect(calls).toEqual([])
 })

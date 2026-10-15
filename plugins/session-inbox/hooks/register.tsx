@@ -316,12 +316,15 @@ async function sendToGroup($: EngineInterface, id: string, text: string, by: 'us
     if (panes) return typeIntoPanes($, panes, group.id, body, self)
     return fail(`No live member of ${group.id} besides this session (ListAgents lists ${peers.length} peer${peers.length === 1 ? '' : 's'}).`)
   }
-  const chosen = all.slice(0, MAX_RECIPIENTS)
+  if (all.length > MAX_RECIPIENTS) {
+    return fail(`NOT SENT: ${group.id} has ${all.length} recipients; the per-post limit is ${MAX_RECIPIENTS}. ` +
+      `Pending, not attempted: ${all.map(r => r.address).join(', ')}. Select a smaller group; no handover or fallback was started.`)
+  }
   const message = tagged(group.id, body)
   const delivered: string[] = []
   const failed: Failure[] = []
   let refused = ''
-  for (const r of chosen) {
+  for (const r of all) {
     let reason: string
     try {
       const sent = await $.session.send({ to: r.address, text: message })
@@ -331,7 +334,16 @@ async function sendToGroup($: EngineInterface, id: string, text: string, by: 'us
       }
       reason = sent.reason
     } catch (err) {
-      reason = why(err)
+      // The recipient may have accepted before the response was lost. Never reinterpret an
+      // exception (even one mentioning permissions) as a confirmed refusal that can be replayed.
+      const pending = all.slice(all.indexOf(r) + 1).map(p => p.address)
+      return {
+        ok: false,
+        text: `UNKNOWN delivery to ${r.address} (${why(err)}). Stopped; do not resend automatically. ` +
+          `Confirmed delivered: ${delivered.join(', ') || 'none'}. ` +
+          `Pending, not attempted: ${pending.join(', ') || 'none'}. No handover or WMUX fallback was started.`,
+        handOver: '',
+      }
     }
     failed.push({ name: r.name, reason })
     if (delivered.length === 0 && REFUSED_BY_PERMISSIONS.test(reason)) {
@@ -340,7 +352,7 @@ async function sendToGroup($: EngineInterface, id: string, text: string, by: 'us
     }
   }
   if (refused) {
-    const addresses = chosen.map(r => r.address)
+    const addresses = all.map(r => r.address)
     // ListAgents names cannot be matched to wmux session ids. Typing first would leave external
     // recipients unsent; handing over afterwards could resend to the same local session. Keep the
     // entire named recipient set on one route. The model's calls still face its permission checks.
@@ -369,8 +381,6 @@ async function sendToGroup($: EngineInterface, id: string, text: string, by: 'us
   }
   const parts = [delivered.length ? `Sent to ${group.id}: ${delivered.join(', ')}.` : `Delivered to nobody in ${group.id}.`]
   if (failed.length) parts.push(`Not delivered: ${failures(failed)}.`)
-  const left = all.length - chosen.length
-  if (left) parts.push(`${left} more member${left > 1 ? 's' : ''} left out (${MAX_RECIPIENTS} at most per post).`)
   return { ok: delivered.length > 0, text: parts.join(' '), handOver: '' }
 }
 
@@ -681,7 +691,7 @@ export const register: Register = on => {
               label={`Post to ${s.id}: `}
               placeholder="one message to every live member of the group"
               submitLabel="post"
-              onSubmit={async value => $.ui.toast((await postAsUser($, s.id, value, 'submit')).slice(0, 240), { timeoutMs: 8000 })}
+              onSubmit={async value => $.ui.toast(await postAsUser($, s.id, value, 'submit'), { timeoutMs: 8000 })}
             />
           </Box>,
         )

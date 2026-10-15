@@ -164,6 +164,13 @@ test('a prompt box is empty only when it is seen whole and holds nothing', () =>
   expect(editorIsEmpty('')).toBe(false)
 })
 
+test('a multiline draft ending in a prompt-looking line is never an empty editor', () => {
+  const edge = '\u2500'.repeat(40)
+  expect(editorIsEmpty(`${edge}\n\u276f keep this private draft\n> \n${edge}`)).toBe(false)
+  expect(editorIsEmpty(`${edge}\n> unfinished private draft\n  > \n${edge}`)).toBe(false)
+  expect(editorIsEmpty(`${edge}\n> unfinished draft\n${edge}\n> \n${edge}`)).toBe(false)
+})
+
 test('a typed post is one line, tagged, and says who posted it and how it arrived', () => {
   expect(typedPost('fleet', 'learn-vx', 'main is red\n  do not rebase')).toBe(
     '[group fleet] main is red do not rebase (posted by the user from learn-vx with /inbox send, typed here by wmux)',

@@ -338,23 +338,19 @@ export function screenText(json: string): string {
 }
 
 const PROMPT_LINE = /^\s*[>\u276f]\s?(.*)$/
-const BOX_EDGE = /^\s*[\u2500\u2501]{5,}.*$/
+const BOX_EDGE = /^\s*[\u2500\u2501]{5,}\s*$/
 
 // Whether the prompt box at the bottom of a pane's screen holds nothing. A screen that does not
 // show the box, bottom edge included, is not empty: a draft must never be typed over on a guess.
 export function editorIsEmpty(screen: string): boolean {
   const lines = screen.split(/\r?\n/)
-  let at = -1
-  lines.forEach((l, i) => {
-    if (PROMPT_LINE.test(l)) at = i
-  })
-  if (at < 0) return false
-  const draft = [PROMPT_LINE.exec(lines[at] ?? '')?.[1] ?? '']
-  for (const l of lines.slice(at + 1)) {
-    if (BOX_EDGE.test(l)) return draft.every(x => x.trim() === '')
-    draft.push(l)
-  }
-  return false
+  const edges = lines.map((line, index) => BOX_EDGE.test(line) ? index : -1).filter(index => index >= 0)
+  // More than one possible frame, continuation lines, or a later prompt are ambiguous. Leave
+  // them untouched instead of guessing which prompt-looking line belongs to the actual editor.
+  if (edges.length !== 2) return false
+  const [top = -1, bottom = -1] = edges
+  if (bottom - top !== 2 || lines.slice(bottom + 1).some(line => PROMPT_LINE.test(line))) return false
+  return PROMPT_LINE.exec(lines[top + 1] ?? '')?.[1] === ''
 }
 
 // One line: a newline typed into a prompt box would submit the post half written.
