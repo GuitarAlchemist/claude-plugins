@@ -347,29 +347,26 @@ test('with no live peer, /inbox send to a group of everyone is typed by wmux int
   expect(world.filled).toEqual([])
 })
 
-test('when the permission layer refuses the send, a post to everyone goes through wmux instead of the hand-over', async ($, on) => {
+test('when named recipients are refused, a post to everyone keeps one hand-over route', async ($, on) => {
   const world = engine(on, FLEET, LIST, CLASSIFIER, IN_WMUX)
   const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX, 'surf-b': EMPTY_BOX })
 
   const r = await $.command.run(inbox('send fleet main is red'))
 
   expect(world.attempts).toBe(1)
-  expect(calls.filter(c => c[0] === 'send').map(c => c[2])).toEqual(['surf-a', 'surf-b'])
-  expect(calls.find(c => c[0] === 'send')?.[3]).toBe(LINE.replace('this session', 'learn-vx'))
-  expect(r.text).toBe(
-    'Typed by wmux into 2 panes of fleet. 1 pane left alone (busy, or a draft in the editor): post again later for those. ' +
-      'ListAgents lists learn-17, music-7c, ga-c0, tars-60: wmux types only into the panes of this wmux, so one of them running elsewhere did not get the post.',
-  )
-  expect(world.filled).toEqual([])
+  expect(calls).toEqual([])
+  expect(world.filled.length).toBe(1)
+  expect(world.filled[0]).toContain('one call per recipient (learn-17, music-7c, ga-c0, tars-60)')
+  expect(r.text).toContain('recipients are in your prompt box')
 })
 
-test('when the send is refused and wmux types into no pane, the live members still get the hand-over', async ($, on) => {
+test('when named recipients are refused, busy panes do not suppress the hand-over', async ($, on) => {
   const world = engine(on, FLEET, LIST, CLASSIFIER, IN_WMUX)
   fakeWmux(on, PANES, { 'surf-a': DRAFT_BOX, 'surf-b': DRAFT_BOX })
 
   const r = await $.command.run(inbox('send fleet main is red'))
 
-  expect(r.text).toContain("wmux typed fleet's post into no pane.")
+  expect(r.text).toContain("The permission mode refused the plugin's send")
   expect(r.text).toContain('The post and its recipients are in your prompt box')
   expect(world.filled.length).toBe(1)
   expect(world.filled[0]?.endsWith('[group fleet] main is red')).toBe(true)
@@ -383,6 +380,36 @@ test('when WMUX_NODE is wmux\'s own Electron binary, it is run as Node', async (
 
   expect(asElectron.length).toBeGreaterThan(0)
   expect(asElectron.every(e => e?.ELECTRON_RUN_AS_NODE === '1')).toBe(true)
+})
+
+test('a mixed recipient snapshot keeps all refused native recipients actionable without typing unmapped panes', async ($, on) => {
+  const world = engine(on, FLEET, LIST, CLASSIFIER, IN_WMUX)
+  const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX, 'surf-b': EMPTY_BOX })
+  const r = await $.command.run(inbox('send fleet mixed-delivery-receipt'))
+  expect(world.filled.length).toBe(1)
+  for (const address of ['learn-17', 'music-7c', 'ga-c0', 'tars-60']) {
+    expect(world.filled[0]).toContain(address)
+  }
+  expect(world.filled[0]?.endsWith('[group fleet] mixed-delivery-receipt')).toBe(true)
+  expect(calls.filter(c => c[0] === 'send' || c[0] === 'send-key')).toEqual([])
+  expect(world.attempts).toBe(1)
+  expect(r.text).toContain('recipients are in your prompt box')
+})
+
+test('the pane hands a refused mixed post to the model once, with the complete recipient set', async ($, on) => {
+  const world = engine(on, FLEET, LIST, CLASSIFIER, IN_WMUX)
+  const calls = fakeWmux(on, PANES, { 'surf-a': EMPTY_BOX, 'surf-b': EMPTY_BOX })
+  await $.command.run(inbox('groups'))
+  const ui = await $.ui.mount({ plugin: 'session-inbox', surface: 'terminal', component: 'Pane', props: PANE_PROPS, requestId: 'inbox' })
+  const fleet = await ui.find({ type: 'Button', text: /fleet$/ })
+  await ui.press({ key: fleet?.key ?? 'missing' })
+  await ui.input({ key: 'post-fleet', text: 'mixed-pane-receipt' })
+  expect(world.attempts).toBe(1)
+  expect(world.prompts.length).toBe(1)
+  expect(world.prompts[0]).toContain('one call per recipient (learn-17, music-7c, ga-c0, tars-60)')
+  expect(world.prompts[0]?.endsWith('[group fleet] mixed-pane-receipt')).toBe(true)
+  expect(calls).toEqual([])
+  expect(world.filled).toEqual([])
 })
 
 test('a standalone Node is started with no variable of ours', async ($, on) => {

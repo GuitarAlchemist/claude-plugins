@@ -14,7 +14,6 @@ import {
   groupsOf,
   handOver,
   isEveryone,
-  listedElsewhere,
   MODEL_SENDS,
   panesToType,
   parseCommand,
@@ -342,13 +341,9 @@ async function sendToGroup($: EngineInterface, id: string, text: string, by: 'us
   }
   if (refused) {
     const addresses = chosen.map(r => r.address)
-    // wmux cannot tell which of the listed members its panes are, so they are named when it typed
-    // and handed over as before when it typed nothing.
-    const typed = panes ? await typeIntoPanes($, panes, group.id, body, self) : undefined
-    if (typed?.ok) return { ...typed, text: `${typed.text} ${listedElsewhere(chosen.map(r => r.name))}` }
-    if (typed) {
-      return { ok: false, text: typed.text, handOver: handOver(group.id, addresses, message, refused, by) }
-    }
+    // ListAgents names cannot be matched to wmux session ids. Typing first would leave external
+    // recipients unsent; handing over afterwards could resend to the same local session. Keep the
+    // entire named recipient set on one route. The model's calls still face its permission checks.
     return {
       ok: false,
       text: `The permission mode refused the plugin's send to ${addresses.join(', ')} (${refused}).`,

@@ -231,7 +231,7 @@ export const USAGE = [
   '/inbox hold | pass             hold messages here, or let them all through',
   '/inbox groups                  list the working groups and who is live in each',
   '/inbox send <group> <text>     send one message to every live member of a group',
-  '                               (to a group of everyone, from a wmux pane: typed into its idle panes when no send gets through)',
+  '                               (to a group of everyone, from a wmux pane: typed into its idle panes when ListAgents lists no recipient)',
   '/inbox group create <id> [working-group|sub-group|community] [title]',
   '/inbox group join <id> [member]     add this session, or a name or pattern (learn-*)',
   '/inbox group leave <id> [member]',
@@ -279,8 +279,8 @@ export function handOver(group: string, addresses: readonly string[], message: s
 
 // Delivery through wmux, for a post the user typed to a group of everyone (`*`).
 //
-// Where the sessions are wmux panes, ListAgents may list no peer and the permission layer may refuse
-// the plugin's send, so such a post reaches nobody. wmux can type it into each pane instead. What is
+// Where the sessions are wmux panes, ListAgents may list no peer. wmux can type the post into each
+// pane instead. A refused named-recipient send stays on its hand-over route to avoid duplicates. What is
 // typed arrives as the user's own prompt, not as a peer's message the inbox can hold: that is why
 // only the user's posts go this way, never the model's group_send, and why a pane is typed into only
 // when it is idle with an empty editor, once.
@@ -360,11 +360,6 @@ export function editorIsEmpty(screen: string): boolean {
 // One line: a newline typed into a prompt box would submit the post half written.
 export function typedPost(id: string, sender: string, text: string): string {
   return `${tagged(id, text.replace(/\s+/g, ' '))} (posted by the user from ${sender || 'another session'} with /inbox send, typed here by wmux)`
-}
-
-// What a refused send leaves open once wmux has typed: the live members it had no way to recognise.
-export function listedElsewhere(names: string[]): string {
-  return `ListAgents lists ${names.join(', ')}: wmux types only into the panes of this wmux, so one of them running elsewhere did not get the post.`
 }
 
 export function typedReport(id: string, r: { typed: number; busy: number; shared: number; unknown: number }): string {
