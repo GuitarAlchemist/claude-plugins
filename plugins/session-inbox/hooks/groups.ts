@@ -231,6 +231,7 @@ export const USAGE = [
   '/inbox hold | pass             hold messages here, or let them all through',
   '/inbox groups                  list the working groups and who is live in each',
   '/inbox send <group> <text>     send one message to every live member of a group',
+  '                               (to a group of everyone, from a wmux pane: typed into its idle panes when ListAgents lists no recipient)',
   '/inbox group create <id> [working-group|sub-group|community] [title]',
   '/inbox group join <id> [member]     add this session, or a name or pattern (learn-*)',
   '/inbox group leave <id> [member]',
@@ -274,4 +275,94 @@ export function handOver(group: string, addresses: readonly string[], message: s
     '',
     message,
   ].join('\n')
+}
+
+// Delivery through wmux, for a post the user typed to a group of everyone (`*`).
+//
+// Where the sessions are wmux panes, ListAgents may list no peer. wmux can type the post into each
+// pane instead. A refused named-recipient send stays on its hand-over route to avoid duplicates. What is
+// typed arrives as the user's own prompt, not as a peer's message the inbox can hold: that is why
+// only the user's posts go this way, never the model's group_send, and why a pane is typed into only
+// when it is idle with an empty editor, once.
+
+export type Pane = { surface: string; session: string; isIdle: boolean }
+
+export function isEveryone(group: Group): boolean {
+  return group.members.includes('*')
+}
+
+// What `wmux agent-state` prints: `{ states: […] }`, or `{ state: {…} }` for one surface.
+export function parsePanes(json: string): Pane[] {
+  let raw: unknown
+  try {
+    raw = JSON.parse(json)
+  } catch {
+    return []
+  }
+  const o = raw && typeof raw === 'object' ? (raw as { states?: unknown; state?: unknown }) : {}
+  const list = Array.isArray(o.states) ? o.states : o.state && typeof o.state === 'object' ? [o.state] : []
+  const panes: Pane[] = []
+  for (const s of list) {
+    if (!s || typeof s !== 'object') continue
+    const p = s as Record<string, unknown>
+    if (typeof p['surfaceId'] !== 'string') continue
+    panes.push({
+      surface: p['surfaceId'],
+      session: typeof p['sessionId'] === 'string' ? p['sessionId'] : '',
+      isIdle: p['state'] === 'idle' && p['runDepth'] === 0 && !p['blockedReason'] && p['sessionProvider'] === 'claude',
+    })
+  }
+  return panes
+}
+
+// The panes to type into, this one left out. `shared` counts panes whose session id another pane
+// also reports: which of them holds the session is unknown, so neither is typed into.
+export function panesToType(panes: readonly Pane[], self: string): { chosen: string[]; busy: number; shared: number } {
+  const others = panes.filter(p => p.surface !== self)
+  const isShared = (p: Pane) => p.session !== '' && panes.filter(q => q.session === p.session).length > 1
+  return {
+    chosen: others.filter(p => p.isIdle && !isShared(p)).map(p => p.surface),
+    busy: others.filter(p => !p.isIdle && !isShared(p)).length,
+    shared: others.filter(isShared).length,
+  }
+}
+
+export function screenText(json: string): string {
+  try {
+    const raw: unknown = JSON.parse(json)
+    const text = raw && typeof raw === 'object' ? (raw as { text?: unknown }).text : undefined
+    return typeof text === 'string' ? text : ''
+  } catch {
+    return ''
+  }
+}
+
+const PROMPT_LINE = /^\s*[>\u276f]\s?(.*)$/
+const BOX_EDGE = /^\s*[\u2500\u2501]{5,}\s*$/
+
+// Whether the prompt box at the bottom of a pane's screen holds nothing. A screen that does not
+// show the box, bottom edge included, is not empty: a draft must never be typed over on a guess.
+export function editorIsEmpty(screen: string): boolean {
+  const lines = screen.split(/\r?\n/)
+  const edges = lines.map((line, index) => BOX_EDGE.test(line) ? index : -1).filter(index => index >= 0)
+  // More than one possible frame, continuation lines, or a later prompt are ambiguous. Leave
+  // them untouched instead of guessing which prompt-looking line belongs to the actual editor.
+  if (edges.length !== 2) return false
+  const [top = -1, bottom = -1] = edges
+  if (bottom - top !== 2 || lines.slice(bottom + 1).some(line => PROMPT_LINE.test(line))) return false
+  return PROMPT_LINE.exec(lines[top + 1] ?? '')?.[1] === ''
+}
+
+// One line: a newline typed into a prompt box would submit the post half written.
+export function typedPost(id: string, sender: string, text: string): string {
+  return `${tagged(id, text.replace(/\s+/g, ' '))} (posted by the user from ${sender || 'another session'} with /inbox send, typed here by wmux)`
+}
+
+export function typedReport(id: string, r: { typed: number; busy: number; shared: number; unknown: number }): string {
+  const s = (n: number) => `${n} pane${n === 1 ? '' : 's'}`
+  const parts = [r.typed ? `Typed by wmux into ${s(r.typed)} of ${id}.` : `wmux typed ${id}'s post into no pane.`]
+  if (r.busy) parts.push(`${s(r.busy)} left alone (busy, or a draft in the editor): post again later for those.`)
+  if (r.shared) parts.push(`${s(r.shared)} left alone (two panes report one session id).`)
+  if (r.unknown) parts.push(`${s(r.unknown)}: wmux did not confirm, and nothing is typed twice.`)
+  return parts.join(' ')
 }

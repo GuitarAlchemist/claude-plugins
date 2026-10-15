@@ -7,23 +7,30 @@ import {
   canModelSend,
   createGroup,
   describe,
+  editorIsEmpty,
   emptyRegistry,
   failures,
   find,
   groupsOf,
   handOver,
+  isEveryone,
   MODEL_SENDS,
+  panesToType,
   parseCommand,
   parseListAgents,
+  parsePanes,
   parseRegistry,
   passingGroup,
   recipients,
   REFUSED_BY_PERMISSIONS,
   REGISTRY_PATH,
   removeMember,
+  screenText,
   serializeRegistry,
   setPolicy,
   tagged,
+  typedPost,
+  typedReport,
   untag,
   USAGE,
 } from './groups'
@@ -212,6 +219,79 @@ async function groupPass($: EngineInterface, sender: string, broadcast: string):
 // the permission layer, and the model's SendMessage calls are judged with the turn's context.
 type Post = { ok: boolean; text: string; handOver: string }
 
+// wmux as this session finds it: the CLI and the pane it runs in, both set by wmux in the shells it
+// starts. Without them this session is not a wmux pane and nothing is typed anywhere.
+type Wmux = { self: string; run: (args: string[]) => Promise<string> }
+
+async function wmux($: EngineInterface): Promise<Wmux | undefined> {
+  const cli = await $.env.get('WMUX_CLI')
+  const self = await $.env.get('WMUX_SURFACE_ID')
+  if (!cli || !self) return undefined
+  const node = (await $.env.get('WMUX_NODE')) || 'node'
+  // WMUX_NODE may be wmux's own Electron binary, which is Node only under this variable: without it
+  // the command opens a second wmux window instead of running the CLI.
+  const env = (await $.env.get('WMUX_NODE_ELECTRON')) === '1' ? { ELECTRON_RUN_AS_NODE: '1' } : undefined
+  return {
+    self,
+    run: async args => {
+      const r = await $.process.run([node, cli, ...args], env ? { timeoutMs: 15_000, env } : { timeoutMs: 15_000 })
+      if (r.exitCode !== 0) throw new Error((r.stderr.trim().split('\n')[0] ?? '').slice(0, 120) || `wmux ${args[0]} failed`)
+      return r.stdout
+    },
+  }
+}
+
+// The user's post, typed by wmux into every idle pane whose editor is empty, once each. A pane is
+// read again right before it is typed into; one that wmux did not confirm is never typed into twice.
+async function typeIntoPanes($: EngineInterface, w: Wmux, group: string, body: string, self: string): Promise<Post> {
+  let plan
+  try {
+    plan = panesToType(parsePanes(await w.run(['agent-state'])), w.self)
+  } catch (err) {
+    return { ok: false, text: `wmux did not list its panes (${why(err)}): nothing was typed.`, handOver: '' }
+  }
+  const line = typedPost(group, self, body)
+  const count = { typed: 0, busy: plan.busy, shared: plan.shared, unknown: 0 }
+  for (const surface of plan.chosen) {
+    try {
+      const [now] = parsePanes(await w.run(['agent-state', '--surface', surface]))
+      const screen = screenText(await w.run(['read-screen', '--surface', surface, '--lines', '16']))
+      if (!now?.isIdle || !editorIsEmpty(screen)) {
+        count.busy += 1
+        continue
+      }
+    } catch {
+      count.busy += 1 // not read, so not typed into
+      continue
+    }
+    try {
+      await w.run(['send', '--surface', surface, line])
+      await w.run(['send-key', 'enter', '--surface', surface])
+      count.typed += 1
+    } catch {
+      count.unknown += 1
+    }
+  }
+  if (count.typed) {
+    const at = await $.clock.now()
+    const post: InboxMessage = {
+      id: `${at.toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+      at,
+      fromName: self || 'this session',
+      fromAddress: '',
+      origin: 'user',
+      body,
+      raw: line,
+      urgent: false,
+      status: 'sent',
+      group,
+      via: '',
+    }
+    await update($, messages, list => trimmed([...list, post]))
+  }
+  return { ok: count.typed > 0, text: typedReport(group, count), handOver: '' }
+}
+
 // One message to every live member of a group but this session, one `$.session.send` each, at most
 // MAX_RECIPIENTS of them; the post is kept in the inbox as `sent`. The first refusal of the permission
 // layer stops the round: the others would be refused alike.
@@ -229,15 +309,22 @@ async function sendToGroup($: EngineInterface, id: string, text: string, by: 'us
   }
   const { self, peers } = await agents($)
   const all = recipients(loaded.registry, group.id, peers, self)
+  // Only what the user typed, and only to a group of everyone: wmux knows panes, not session names,
+  // and what it types reads as the user's prompt, which a model's post must never do.
+  const panes = by === 'user' && isEveryone(group) ? await wmux($) : undefined
   if (all.length === 0) {
+    if (panes) return typeIntoPanes($, panes, group.id, body, self)
     return fail(`No live member of ${group.id} besides this session (ListAgents lists ${peers.length} peer${peers.length === 1 ? '' : 's'}).`)
   }
-  const chosen = all.slice(0, MAX_RECIPIENTS)
+  if (all.length > MAX_RECIPIENTS) {
+    return fail(`NOT SENT: ${group.id} has ${all.length} recipients; the per-post limit is ${MAX_RECIPIENTS}. ` +
+      `Pending, not attempted: ${all.map(r => r.address).join(', ')}. Select a smaller group; no handover or fallback was started.`)
+  }
   const message = tagged(group.id, body)
   const delivered: string[] = []
   const failed: Failure[] = []
   let refused = ''
-  for (const r of chosen) {
+  for (const r of all) {
     let reason: string
     try {
       const sent = await $.session.send({ to: r.address, text: message })
@@ -247,7 +334,17 @@ async function sendToGroup($: EngineInterface, id: string, text: string, by: 'us
       }
       reason = sent.reason
     } catch (err) {
-      reason = why(err)
+      // The recipient may have accepted before the response was lost. Never reinterpret an
+      // exception (even one mentioning permissions) as a confirmed refusal that can be replayed.
+      const pending = all.slice(all.indexOf(r) + 1).map(p => p.address)
+      return {
+        ok: false,
+        text: `UNKNOWN delivery to ${r.address} (${why(err)}). Stopped; do not resend automatically. ` +
+          `Confirmed delivered: ${delivered.join(', ') || 'none'}. ` +
+          `Confirmed not delivered: ${failed.map(f => `${f.name} (${f.reason})`).join(', ') || 'none'}. ` +
+          `Pending, not attempted: ${pending.join(', ') || 'none'}. No handover or WMUX fallback was started.`,
+        handOver: '',
+      }
     }
     failed.push({ name: r.name, reason })
     if (delivered.length === 0 && REFUSED_BY_PERMISSIONS.test(reason)) {
@@ -256,7 +353,10 @@ async function sendToGroup($: EngineInterface, id: string, text: string, by: 'us
     }
   }
   if (refused) {
-    const addresses = chosen.map(r => r.address)
+    const addresses = all.map(r => r.address)
+    // ListAgents names cannot be matched to wmux session ids. Typing first would leave external
+    // recipients unsent; handing over afterwards could resend to the same local session. Keep the
+    // entire named recipient set on one route. The model's calls still face its permission checks.
     return {
       ok: false,
       text: `The permission mode refused the plugin's send to ${addresses.join(', ')} (${refused}).`,
@@ -282,8 +382,6 @@ async function sendToGroup($: EngineInterface, id: string, text: string, by: 'us
   }
   const parts = [delivered.length ? `Sent to ${group.id}: ${delivered.join(', ')}.` : `Delivered to nobody in ${group.id}.`]
   if (failed.length) parts.push(`Not delivered: ${failures(failed)}.`)
-  const left = all.length - chosen.length
-  if (left) parts.push(`${left} more member${left > 1 ? 's' : ''} left out (${MAX_RECIPIENTS} at most per post).`)
   return { ok: delivered.length > 0, text: parts.join(' '), handOver: '' }
 }
 
@@ -594,7 +692,7 @@ export const register: Register = on => {
               label={`Post to ${s.id}: `}
               placeholder="one message to every live member of the group"
               submitLabel="post"
-              onSubmit={async value => $.ui.toast((await postAsUser($, s.id, value, 'submit')).slice(0, 240), { timeoutMs: 8000 })}
+              onSubmit={async value => $.ui.toast(await postAsUser($, s.id, value, 'submit'), { timeoutMs: 8000 })}
             />
           </Box>,
         )
