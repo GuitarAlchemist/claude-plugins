@@ -29,6 +29,13 @@
       "category": "productivity"
     },
     {
+      "name": "voice",
+      "version": "0.1.0",
+      "description": "Lets Claude speak aloud through piper-voice, a local streaming text-to-speech service on Piper: sentence by sentence, with barge-in, on 127.0.0.1 only",
+      "source": "./plugins/voice",
+      "category": "productivity"
+    },
+    {
       "name": "ga",
       "version": "1.0.0",
       "description": "Guitar Alchemist DSL: music theory tools, chord analysis, tab search and GA Language commands. It runs GaMcpServer from the current directory, so it works only in a session started inside a ga checkout",
