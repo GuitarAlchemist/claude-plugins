@@ -50,6 +50,9 @@ func (u *Utterance) Add(sentence string) bool {
 // End says no sentence will follow.
 func (u *Utterance) End() { close(u.in) }
 
+// Stop cuts this utterance alone, whether it is playing or still queued.
+func (u *Utterance) Stop() { u.cancel() }
+
 // Done is closed once the utterance has been played, stopped, or has failed.
 func (u *Utterance) Done() <-chan struct{} { return u.done }
 

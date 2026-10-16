@@ -14,23 +14,30 @@ leaves the machine.
   carry an `Origin` header or a non-loopback `Host`, so a web page cannot make
   the machine talk.
 
-The `/voice` skill tells Claude when and how to use it. IX drives it through the
-`ix-voice` crate. Both follow the contract below.
+The `/voice` skill tells Claude when to speak. Claude speaks through the plugin's
+MCP server (`piper-voice mcp`: tools `say`, `stop`, `voices`, `status`). IX drives
+the same service through the `ix-voice` crate. All of them follow the contract
+below.
 
-## HTTP contract v0.1
+## HTTP contract v0.2
 
 | Method and path | Body | Answer |
 | --- | --- | --- |
 | `GET /health` | | `{"ok", "version", "engine", "voice", "sample_rate"}` |
 | `GET /v1/voices` | | `[{"id", "language", "quality", "sample_rate", "license"}]` |
 | `POST /v1/say` | `{"text", "voice"?, "rate"?, "wait"?}` | `{"id", "sentences"}` once the text is queued. With `"wait": true`, it answers once the text has been played: `{"id", "sentences", "played_ms", "stopped"}` |
+| `POST /v1/say/stream?voice=&rate=&wait=` | `text/plain`, usually chunked | Each sentence is queued as soon as the body completes it, so the first one plays while the caller is still writing, as with an LLM's token stream. Once the body ends, it answers as `/v1/say` does. |
+| `POST /v1/synthesize` | `{"text", "voice"?, "rate"?}` | `audio/wav`, streamed: a header whose two sizes are `0xFFFFFFFF`, then each sentence's PCM as soon as it is made. It plays nothing. `X-Sentences` gives the count. A failure after the header ends the stream early and is named in the `X-Voice-Error` trailer. |
 | `POST /v1/stop` | | `{"stopped": <utterances cut or dropped>}` |
 
 How the fields work:
 
 - `rate` is a speed, from 0.5 to 2, where 2 is twice as fast. The service passes
   `length_scale = 1/rate` to Piper.
-- `text` is limited to 20,000 characters.
+- `text` is limited to 20,000 characters. For a stream, the limit counts the
+  whole body: past it, the service answers 413 and stops that utterance.
+- In `/v1/say/stream`, `wait` accepts `1`, `0`, `true` and `false`. Unknown
+  query parameters are refused.
 - Unknown fields are refused, so a typo in a field name shows up as an error.
 
 Errors are `{"error": "<what is wrong>"}`:
@@ -41,9 +48,6 @@ Errors are `{"error": "<what is wrong>"}`:
 - 503: the queue is full;
 - 500: the engine failed during `wait`.
 
-Next slice: `POST /v1/say/stream`, which speaks a chunked text body sentence by
-sentence as it arrives, and `POST /v1/synthesize`, which streams WAV without
-playing it.
 
 ## Install
 
@@ -65,6 +69,41 @@ and `PIPER_VOICE_VOICE` (the default voice).
 
 Setup pins the Windows amd64 release only. On other systems, put a `piper`
 binary under `engine/piper/` yourself.
+
+## Claude: the MCP server
+
+The plugin declares `piper-voice mcp` as its MCP server, at
+`${LOCALAPPDATA}/piper-voice/bin/piper-voice.exe`, which Claude Code expands. It
+has four tools: `say {text, voice?, rate?, wait?}`, `stop`, `voices` and `status`.
+
+- **Over HTTP.** Each tool is one request to the running service at
+  `PIPER_VOICE_ADDR`, and its JSON answer is the tool's text.
+- **When the service is down,** a tool fails with "start it with: piper-voice serve".
+- **Before the binary is built,** the server does not start, and the session
+  reports that it failed to connect.
+
+## Starting at logon
+
+```powershell
+cd plugins/voice/service
+go build -ldflags "-H windowsgui" -o "$env:LOCALAPPDATA\piper-voice\bin\piper-voiced.exe" .
+& "$env:LOCALAPPDATA\piper-voice\bin\piper-voice.exe" install --print   # shows what it would register
+& "$env:LOCALAPPDATA\piper-voice\bin\piper-voice.exe" install           # piper-voice uninstall undoes it
+```
+
+`install` writes one value, `piper-voice`, under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Windows starts that value
+at logon. The value runs `piper-voiced.exe serve --log
+%LOCALAPPDATA%\piper-voice\logs\service.log`. `piper-voiced.exe` is the same
+program built with `-H windowsgui`, so no console window opens, and its log goes
+to that file. The other options do not work here:
+
+- a Windows service runs in session 0, which cannot reach the user's speakers;
+- a logon task (`schtasks /SC ONLOGON`) needs administrator rights;
+- a console program in the Run key opens a window at every logon.
+
+`install` refuses to register anything until the windowless build and the
+engine are both in place.
 
 ## How it drives Piper
 
@@ -92,6 +131,6 @@ is a candidate engine for a later slice, behind the same `Engine` interface.
 
 ```powershell
 cd plugins/voice/service
-go test ./...              # no Piper, no sound card: a fake piper and a fake player
+go test ./...              # no Piper, no sound card: a fake piper, a fake player, an in-memory MCP client
 go test -tags nooto ./...  # without the audio library, as on a machine without sound
 ```

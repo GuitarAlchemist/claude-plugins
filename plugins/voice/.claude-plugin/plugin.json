@@ -2,5 +2,12 @@
   "name": "voice",
   "version": "0.1.0",
   "description": "Lets Claude speak aloud through piper-voice, a local streaming text-to-speech service on Piper: sentence by sentence, with barge-in, on 127.0.0.1 only",
-  "author": { "name": "Stephane Pareilleux" }
+  "author": { "name": "Stephane Pareilleux" },
+  "mcpServers": {
+    "voice": {
+      "type": "stdio",
+      "command": "${LOCALAPPDATA}/piper-voice/bin/piper-voice.exe",
+      "args": ["mcp"]
+    }
+  }
 }

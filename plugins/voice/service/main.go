@@ -2,13 +2,14 @@
 // sentence, with Piper voices kept warm. It listens on 127.0.0.1 only.
 //
 //	piper-voice setup [--english]   download the Piper engine and voices (pinned SHA-256)
-//	piper-voice serve [--addr A] [--voice V]
+//	piper-voice serve [--addr A] [--voice V] [--log FILE]
 //	piper-voice say [--voice V] [--rate R] [--wait] <text>
 //	piper-voice stop | status | voices
+//	piper-voice mcp                 an MCP server over stdio that drives the running service
+//	piper-voice install [--print] | uninstall   start at logon (HKCU Run), no admin needed
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -50,6 +51,10 @@ func main() {
 		err = call(http.MethodGet, "/health", nil, 5*time.Second)
 	case "voices":
 		err = call(http.MethodGet, "/v1/voices", nil, 5*time.Second)
+	case "mcp":
+		err = mcpCmd()
+	case "install", "uninstall":
+		err = autostartCmd(cmd, args)
 	default:
 		usage()
 	}
@@ -60,7 +65,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: piper-voice setup [--english] | serve [--addr A] [--voice V] | say [--voice V] [--rate R] [--wait] <text> | stop | status | voices")
+	fmt.Fprintln(os.Stderr, "usage: piper-voice setup [--english] | serve [--addr A] [--voice V] [--log FILE] | say [--voice V] [--rate R] [--wait] <text> | stop | status | voices | mcp | install [--print] | uninstall")
 	os.Exit(2)
 }
 
@@ -103,15 +108,33 @@ func setupCmd(args []string) error {
 	return install(h, pins, client, func(s string) { fmt.Println(s) })
 }
 
-func serveCmd(args []string) error {
+func serveCmd(args []string) (err error) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", envOr("PIPER_VOICE_ADDR", defaultAddr), "listen address, loopback only")
 	voice := fs.String("voice", envOr("PIPER_VOICE_VOICE", defaultVoc), "default voice")
+	logFile := fs.String("log", "", "append the log to this file instead of stderr (the windowless build has no console)")
 	_ = fs.Parse(args)
+	var logOut io.Writer = os.Stderr
+	if *logFile != "" {
+		if err := os.MkdirAll(filepath.Dir(*logFile), 0o755); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(*logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		logOut = f
+	}
+	logger := log.New(logOut, "", log.LstdFlags|log.Lmicroseconds)
+	defer func() {
+		if err != nil {
+			logger.Printf("serve: %v", err)
+		}
+	}()
 	if err := loopbackOnly(*addr); err != nil {
 		return err
 	}
-	logger := log.New(os.Stderr, "", log.LstdFlags|log.Lmicroseconds)
 	h, err := home()
 	if err != nil {
 		return err
@@ -143,7 +166,7 @@ func serveCmd(args []string) error {
 		return startPiper(exe, nil, v, lengthScale, tmp, logger)
 	})
 	defer pool.Close()
-	srv := &Server{Speaker: NewSpeaker(pool.Get, player, logger), Voices: voices, DefaultVoice: def.ID,
+	srv := &Server{Speaker: NewSpeaker(pool.Get, player, logger), Engines: pool.Get, Voices: voices, DefaultVoice: def.ID,
 		Engine: "piper-cli", SampleRate: player.SampleRate(), MaxText: 20000}
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
@@ -179,35 +202,31 @@ func sayCmd(args []string) error {
 		return errors.New("say what? usage: piper-voice say [--voice V] [--rate R] [--wait] <text>")
 	}
 	body, _ := json.Marshal(sayRequest{Text: text, Voice: *voice, Rate: rate, Wait: *wait})
-	timeout := 10 * time.Second
-	if *wait {
-		timeout = 10 * time.Minute
+	return call(http.MethodPost, "/v1/say", body, sayTimeout(*wait))
+}
+
+func autostartCmd(cmd string, args []string) error {
+	key, err := openRunKey()
+	if err != nil {
+		return err
 	}
-	return call(http.MethodPost, "/v1/say", body, timeout)
+	if cmd == "uninstall" {
+		return uninstallCmd(key, os.Stdout)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	h, err := home()
+	if err != nil {
+		return err
+	}
+	return installCmd(args, key, filepath.Dir(exe), h, os.Stdout)
 }
 
 // call sends one request to the running service and prints its answer.
 func call(method, path string, body []byte, timeout time.Duration) error {
-	addr := envOr("PIPER_VOICE_ADDR", defaultAddr)
-	req, err := http.NewRequest(method, "http://"+addr+path, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-	resp, err := (&http.Client{Timeout: timeout}).Do(req)
-	if err != nil {
-		return fmt.Errorf("the service is not answering on %s (start it with: piper-voice serve): %w", addr, err)
-	}
-	defer resp.Body.Close()
-	out, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
+	out, err := serviceClient{addr: envOr("PIPER_VOICE_ADDR", defaultAddr)}.do(context.Background(), method, path, body, timeout)
 	fmt.Print(string(out))
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("%s %s: %s", method, path, resp.Status)
-	}
-	return nil
+	return err
 }

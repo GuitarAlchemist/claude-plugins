@@ -18,6 +18,14 @@ refuses requests from web pages.
 - Everything you say aloud also goes in your text answer. The voice is a second
   channel, never the only one.
 
+## Tools first
+
+This plugin's MCP server gives you four tools: `say` (`text`, and optionally
+`voice`, `rate`, `wait`), `stop`, `voices` and `status`. Their names end in
+`__say`, `__stop`, `__voices` and `__status`. Use them when they are listed. If
+the server failed to connect, the binary has not been built yet: see "First use"
+below. Then fall back to the commands.
+
 ## Commands
 
 The binary is `%LOCALAPPDATA%\piper-voice\bin\piper-voice.exe` once it is built.
@@ -31,7 +39,9 @@ Below, `piper-voice` means that path.
 | list voices | `piper-voice voices` |
 
 Anything that can POST JSON works as well: `POST http://127.0.0.1:59126/v1/say`
-with `{"text": "..."}`. The contract is in this plugin's `README.md`.
+with `{"text": "..."}`. To speak text while you are still producing it, send
+it as a chunked body to `POST /v1/say/stream`. The contract is in this plugin's
+`README.md`.
 
 ## First use on a machine
 
@@ -46,3 +56,7 @@ with `{"text": "..."}`. The contract is in this plugin's `README.md`.
 
 When `status` says it is not running and the user asked for voice, start it
 (step 3). If setup has not been run, tell the user and ask before downloading.
+
+To start the service at every logon (no administrator rights needed), see
+"Starting at logon" in the README: `piper-voice install`, and `uninstall` to
+undo it. That changes the user's logon, so run it only when they ask for it.

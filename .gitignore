@@ -2,5 +2,7 @@
 **/.claude-plugin/types/
 node_modules/
 __pycache__/
-# Built from plugins/voice/service.
+# Built from plugins/voice/service; Windows renames an exe in use to *.exe~ when it is rebuilt.
 piper-voice.exe
+piper-voiced.exe
+*.exe~

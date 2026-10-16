@@ -12,8 +12,10 @@ import (
 func testServer(t *testing.T, play time.Duration) (*httptest.Server, *recorder) {
 	t.Helper()
 	rec := &recorder{}
+	synth := &fakeEngine{rec: &recorder{}} // its own recorder: synthesize must not touch playback
 	s := &Server{Speaker: testSpeaker(rec, 0, play), Voices: []Voice{testVoice}, DefaultVoice: testVoice.ID,
-		Engine: "fake", SampleRate: testRate, MaxText: 50}
+		Engines: func(Voice, float64) (Engine, error) { return synth, nil },
+		Engine:  "fake", SampleRate: testRate, MaxText: 50}
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(func() { s.Speaker.Stop(); ts.Close() })
 	return ts, rec

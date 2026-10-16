@@ -65,6 +65,15 @@ func wavHeader(rate, dataLen int) []byte {
 	return h
 }
 
+// streamingWAVHeader is the header of a WAV stream whose length is not known yet: both sizes
+// are 0xFFFFFFFF, which players read as "until the stream ends".
+func streamingWAVHeader(rate int) []byte {
+	h := wavHeader(rate, 0)
+	binary.LittleEndian.PutUint32(h[4:], 0xFFFFFFFF)
+	binary.LittleEndian.PutUint32(h[40:], 0xFFFFFFFF)
+	return h
+}
+
 // audioMs is how long pcm lasts at rate.
 func audioMs(pcm []byte, rate int) int64 {
 	if rate <= 0 {

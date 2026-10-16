@@ -13,10 +13,17 @@ import (
 
 // TestMain doubles as a fake piper: started with FAKE_PIPER=1, the test binary reads JSON lines,
 // writes a WAV of 100 samples per character of text to output_file, and prints its path, the
-// way piper --json-input does. The text "die" makes it exit.
+// way piper --json-input does. The text "die" makes it exit. With FAKE_MCP=1 it runs
+// `piper-voice mcp` instead.
 func TestMain(m *testing.M) {
 	if os.Getenv("FAKE_PIPER") == "1" {
 		fakePiper()
+		os.Exit(0)
+	}
+	if os.Getenv("FAKE_MCP") == "1" {
+		if err := mcpCmd(); err != nil {
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 	os.Exit(m.Run())

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"slices"
@@ -56,8 +57,12 @@ type fakeEngine struct {
 	delay time.Duration
 }
 
+// Synthesize returns the sentence's own bytes as its "audio"; the sentence "boom." fails.
 func (f *fakeEngine) Synthesize(_ context.Context, s string) ([]byte, error) {
 	f.rec.add("synth " + s)
+	if s == "boom." {
+		return nil, errors.New("the engine broke")
+	}
 	time.Sleep(f.delay)
 	f.rec.add("synthesized " + s)
 	return []byte(s), nil
