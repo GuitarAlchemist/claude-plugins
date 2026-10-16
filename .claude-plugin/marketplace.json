@@ -16,8 +16,8 @@
     },
     {
       "name": "session-inbox",
-      "version": "0.3.1",
-      "description": "Holds messages from other sessions in an /inbox pane instead of interrupting the turn, and adds working groups in ~/.agents/groups.json that you and the model can post to",
+      "version": "0.4.0",
+      "description": "Logs messages from other sessions in an /inbox pane, where /inbox hold keeps them instead of interrupting the turn, and adds working groups in ~/.agents/groups.json that you and the model can post to",
       "source": "./plugins/session-inbox",
       "category": "productivity"
     },
