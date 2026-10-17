@@ -64,8 +64,29 @@ The data folder is `%LOCALAPPDATA%\piper-voice\`, or `PIPER_VOICE_HOME` when it 
 - `voices/` holds the voices;
 - `tmp/` holds one WAV file per sentence, deleted once it has been read.
 
-Two environment variables change the defaults: `PIPER_VOICE_ADDR` (the address)
-and `PIPER_VOICE_VOICE` (the default voice).
+Three environment variables change the defaults: `PIPER_VOICE_ADDR` (the address),
+`PIPER_VOICE_VOICE` (the default voice) and `PIPER_VOICE_FX` (the voice effect,
+below).
+
+## Voice effect
+
+`serve --fx warm`, or `PIPER_VOICE_FX=warm`, plays speech through a warm,
+close-microphone effect with a very small room. The default, `none`, plays the
+voice as Piper made it. The chain is:
+
+- an EQ: more body at 210 Hz, presence at 3.2 kHz, and a softer top;
+- a gentle compressor;
+- a touch of saturation;
+- a 3 % Freeverb room;
+- a make-up gain that keeps the dry voice's level.
+
+How it behaves:
+
+- **Speech that is played.** The effect applies to `/v1/say` and `/v1/say/stream`.
+  `/v1/synthesize` still returns Piper's sound unchanged.
+- **One signal per utterance.** Its state runs on from one sentence to the next,
+  so no pause is added between sentences. A 300 ms tail plays after the last
+  sentence, unless the utterance was stopped.
 
 Setup pins the Windows amd64 release only. On other systems, put a `piper`
 binary under `engine/piper/` yourself.

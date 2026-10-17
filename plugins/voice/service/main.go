@@ -2,7 +2,7 @@
 // sentence, with Piper voices kept warm. It listens on 127.0.0.1 only.
 //
 //	piper-voice setup [--english]   download the Piper engine and voices (pinned SHA-256)
-//	piper-voice serve [--addr A] [--voice V] [--log FILE]
+//	piper-voice serve [--addr A] [--voice V] [--fx none|warm] [--log FILE]
 //	piper-voice say [--voice V] [--rate R] [--wait] <text>
 //	piper-voice stop | status | voices
 //	piper-voice mcp                 an MCP server over stdio that drives the running service
@@ -65,7 +65,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: piper-voice setup [--english] | serve [--addr A] [--voice V] [--log FILE] | say [--voice V] [--rate R] [--wait] <text> | stop | status | voices | mcp | install [--print] | uninstall")
+	fmt.Fprintln(os.Stderr, "usage: piper-voice setup [--english] | serve [--addr A] [--voice V] [--fx none|warm] [--log FILE] | say [--voice V] [--rate R] [--wait] <text> | stop | status | voices | mcp | install [--print] | uninstall")
 	os.Exit(2)
 }
 
@@ -112,6 +112,7 @@ func serveCmd(args []string) (err error) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", envOr("PIPER_VOICE_ADDR", defaultAddr), "listen address, loopback only")
 	voice := fs.String("voice", envOr("PIPER_VOICE_VOICE", defaultVoc), "default voice")
+	fxName := fs.String("fx", envOr("PIPER_VOICE_FX", "none"), "effect on played speech: none or warm")
 	logFile := fs.String("log", "", "append the log to this file instead of stderr (the windowless build has no console)")
 	_ = fs.Parse(args)
 	var logOut io.Writer = os.Stderr
@@ -162,17 +163,21 @@ func serveCmd(args []string) (err error) {
 	if err != nil {
 		return fmt.Errorf("audio output: %w", err)
 	}
+	fx, err := effects(*fxName, player.SampleRate())
+	if err != nil {
+		return err
+	}
 	pool := NewPool(4, func(v Voice, lengthScale float64) (Engine, error) {
 		return startPiper(exe, nil, v, lengthScale, tmp, logger)
 	})
 	defer pool.Close()
-	srv := &Server{Speaker: NewSpeaker(pool.Get, player, logger), Engines: pool.Get, Voices: voices, DefaultVoice: def.ID,
+	srv := &Server{Speaker: NewSpeaker(pool.Get, player, fx, logger), Engines: pool.Get, Voices: voices, DefaultVoice: def.ID,
 		Engine: "piper-cli", SampleRate: player.SampleRate(), MaxText: 20000}
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		return err
 	}
-	logger.Printf("piper-voice %s on http://%s, default voice %s, voices: %s", version, ln.Addr(), def.ID, voiceIDs(voices))
+	logger.Printf("piper-voice %s on http://%s, default voice %s, effect %s, voices: %s", version, ln.Addr(), def.ID, *fxName, voiceIDs(voices))
 	go func() {
 		if _, err := pool.Get(def, 1); err != nil {
 			logger.Printf("warming %s: %v", def.ID, err)

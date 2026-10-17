@@ -81,6 +81,7 @@ var errQueueFull = errors.New("too many utterances are waiting; try again, or st
 type Speaker struct {
 	engines func(v Voice, rate float64) (Engine, error)
 	player  Player
+	fx      func() Effect // nil: play the voice as Piper made it
 	log     *log.Logger
 	queue   chan *Utterance
 	seq     atomic.Uint64
@@ -91,8 +92,9 @@ type Speaker struct {
 	stopGen context.CancelFunc
 }
 
-func NewSpeaker(engines func(v Voice, rate float64) (Engine, error), player Player, logger *log.Logger) *Speaker {
-	s := &Speaker{engines: engines, player: player, log: logger, queue: make(chan *Utterance, 32)}
+// fx, when not nil, makes the effect each utterance is played through.
+func NewSpeaker(engines func(v Voice, rate float64) (Engine, error), player Player, fx func() Effect, logger *log.Logger) *Speaker {
+	s := &Speaker{engines: engines, player: player, fx: fx, log: logger, queue: make(chan *Utterance, 32)}
 	s.gen, s.stopGen = context.WithCancel(context.Background())
 	go s.run()
 	return s
@@ -156,6 +158,10 @@ func (s *Speaker) speak(u *Utterance) {
 			u.fail(fmt.Errorf("voice %s is at %d Hz; this service plays %d Hz", u.Voice.ID, eng.SampleRate(), s.player.SampleRate()))
 			return
 		}
+		var fx Effect
+		if s.fx != nil {
+			fx = s.fx()
+		}
 		for i := 1; ; i++ {
 			var text string
 			var ok bool
@@ -165,6 +171,12 @@ func (s *Speaker) speak(u *Utterance) {
 			case text, ok = <-u.in:
 			}
 			if !ok {
+				if fx != nil {
+					select {
+					case pcms <- fx.Tail():
+					case <-u.ctx.Done():
+					}
+				}
 				return
 			}
 			t := time.Now()
@@ -175,6 +187,9 @@ func (s *Speaker) speak(u *Utterance) {
 				return
 			}
 			s.log.Printf("%s: sentence %d synthesized in %d ms (%d ms of audio)", u.ID, i, time.Since(t).Milliseconds(), audioMs(pcm, eng.SampleRate()))
+			if fx != nil {
+				pcm = fx.Process(pcm)
+			}
 			select {
 			case pcms <- pcm:
 			case <-u.ctx.Done():

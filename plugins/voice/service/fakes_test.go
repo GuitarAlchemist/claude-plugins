@@ -93,7 +93,7 @@ func (f *fakePlayer) Play(ctx context.Context, pcm []byte) error {
 func testSpeaker(rec *recorder, synth, play time.Duration) *Speaker {
 	eng := &fakeEngine{rec: rec, delay: synth}
 	return NewSpeaker(func(Voice, float64) (Engine, error) { return eng, nil },
-		&fakePlayer{rec: rec, dur: play}, log.New(io.Discard, "", 0))
+		&fakePlayer{rec: rec, dur: play}, nil, log.New(io.Discard, "", 0))
 }
 
 var testVoice = Voice{ID: "fr_FR-test-medium", Language: "fr_FR", Quality: "medium", SampleRate: testRate, License: "test"}
