@@ -10,8 +10,7 @@ is doing (the tool running, the turn's time, the tokens and quota used). Its
 labels are in French.
 
 ```text
-/plugin marketplace add GuitarAlchemist/claude-plugins
-/plugin install voice-avatar@guitaralchemist
+/plugin install voice-avatar --marketplace GuitarAlchemist/claude-plugins
 ```
 
 It only reads: the voice plugin's state files under piper-voice's data folder

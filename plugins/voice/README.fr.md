@@ -8,8 +8,7 @@ service local de synthèse vocale en streaming sur
 qui transcrit sur la machine.
 
 ```text
-/plugin marketplace add GuitarAlchemist/claude-plugins
-/plugin install voice@guitaralchemist
+/plugin install voice --marketplace GuitarAlchemist/claude-plugins
 ```
 
 Le contrat HTTP du service, sa compilation, son démarrage à l'ouverture de

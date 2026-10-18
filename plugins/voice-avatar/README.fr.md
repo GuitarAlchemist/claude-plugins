@@ -9,8 +9,7 @@ micro, ce qu'est devenue la dernière phrase entendue, et ce que fait Claude
 (l'outil en cours, la durée du tour, les jetons et le quota consommés).
 
 ```text
-/plugin marketplace add GuitarAlchemist/claude-plugins
-/plugin install voice-avatar@guitaralchemist
+/plugin install voice-avatar --marketplace GuitarAlchemist/claude-plugins
 ```
 
 Il ne fait que lire : les fichiers d'état du plugin voice, dans le dossier de

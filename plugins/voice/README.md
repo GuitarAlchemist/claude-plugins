@@ -22,8 +22,7 @@ below.
 [Français](README.fr.md)
 
 ```text
-/plugin marketplace add GuitarAlchemist/claude-plugins
-/plugin install voice@guitaralchemist
+/plugin install voice --marketplace GuitarAlchemist/claude-plugins
 ```
 
 ## Full duplex: /speak and /listen
