@@ -4,7 +4,7 @@ import type { Voices } from '../types'
 import {
   asksQuestion, asksYesNo, bar, faceOf, bigFace, callWarning, costLine, cursor, ear, earColor, elapsed, face, gaiaMark, hears, heardLine,
   labels, listenState, meter, moveLine, offersAnswers, outcome, paneWidth, pausedMark, places, questionMark, same, stepLine, tint, tokens,
-  turnTokens, voiceRuns,
+  turnTokens, voiceRuns, dollars, lang,
 } from './register'
 
 test('the voices line shows who spoke, one run per speaker, as wide as asked', () => {
@@ -313,4 +313,90 @@ test('the pane lists what became of each utterance and each step of the turn, ne
   expect(bigFace(listening, false)[0]).toBe('  ◕     ◕  ')
   expect(bigFace({ ...listening, target: 'ambient' }, false)[0]).toBe('  ─     ─  ')
   expect(bigFace({ ...listening, mood: 'happy' }, false)[2]).toBe('  ╰─────╯  ')
+})
+
+// ---- In English (the language option set to en): every label, the band and the pane ----
+
+test('the language is French for fr, English for anything else', () => {
+  expect(lang('fr')).toBe('fr')
+  expect(lang('en')).toBe('en')
+  expect(lang('de')).toBe('en')
+})
+
+test('in English, it says who has the floor and what Claude does', () => {
+  expect(labels({ ...quiet, piper: true }, null, 'en')).toEqual(['🔊 Piper speaking'])
+  expect(labels({ ...quiet, observatory: true }, null, 'en')).toEqual(['🔭 Observatory speaking'])
+  expect(labels({ ...quiet, listen: 'loading' }, null, 'en')).toEqual(['⏳ getting ready to listen'])
+  expect(labels(listening, null, 'en')).toEqual(['listening'])
+  expect(labels({ ...listening, levels: [0.2] }, null, 'en')).toEqual(['I hear you'])
+  expect(labels({ ...quiet, listen: 'unknown' }, null, 'en')).toEqual(['❓ listening: state unknown'])
+  expect(labels({ ...quiet, asks: true }, null, 'en')).toEqual(['I have a question for you'])
+  expect(labels({ ...quiet, mood: 'oops' }, null, 'en')).toEqual(["😕 that didn't work"])
+  expect(labels(quiet, { tool: 'Bash', toolMs: 12000, turnMs: 65000 }, 'en')).toEqual(['Bash 12 s · turn 1 min 05'])
+  expect(labels(quiet, { tool: null, toolMs: 0, turnMs: 5000 }, 'en')).toEqual(['thinking · turn 5 s'])
+})
+
+test('in English, the places, the outcomes, the moves and the warnings', () => {
+  expect(places(listening, 'en')?.map(p => `${p.icon} ${p.name}`)).toEqual(['∿ ambient', '♁ Gaia', '✻ Claude'])
+  expect(outcome({ ...listening, last: 'sent' }, 'en')).toBe('✓ received')
+  expect(outcome({ ...listening, last: 'typed' }, 'en')).toBe('✓ typed: Enter to send')
+  expect(outcome({ ...listening, last: 'ignored' }, 'en')).toBe('· not for me')
+  expect(outcome({ ...listening, last: 'piper' }, 'en')).toBe('· that was my voice')
+  expect(outcome({ ...listening, last: 'dropped' }, 'en')).toBe("· ignored: Gaia's voice")
+  expect(outcome({ ...listening, last: 'held' }, 'en')).toBe('· not sent: a question is open on screen')
+  expect(heardLine({ at: 1000, what: 'sent' }, 13000, 'en')).toBe('✓ received · 12 s ago')
+  expect(moveLine({ ...listening, moved: true }, 'en')).toBe('→ now for Claude')
+  expect(moveLine({ ...listening, moved: true, target: 'ambient' }, 'en')).toBe('→ now ambient: nothing is sent')
+  expect(callWarning({ ...listening, callOpen: true }, 'en')).toBe("⚠ the call's mic is open: Gaia hears too")
+  expect(pausedMark({ ...listening, listen: 'paused' }, 'en')).toBe('❚❚ paused')
+  expect(gaiaMark({ ...quiet, gaia: true }, 'en')).toBe('♁ speaking')
+})
+
+test('in English, consumption reads the English way', () => {
+  expect(costLine(null, 'en')).toBe('usage: unavailable')
+  const u = { context: 34.4, fiveHour: 23, sevenDay: 41, usd: 12.345, turnIn: 1_400_000, turnOut: 12_300 }
+  expect(costLine(u, 'en')).toBe('context 34 % · 5 h quota 23 % · week 41 % · API equiv. $12.35, not billed')
+  expect(costLine({ ...u, fiveHour: null, sevenDay: null }, 'en')).toBe('context 34 % · API price ≈ $12.35')
+  expect(turnTokens(u, 'en')).toBe('1.4 M read · 12 k generated')
+  expect(dollars(1.5, 'en')).toBe('$1.50')
+  expect(tokens(1_400_000, 'en')).toBe('1.4 M')
+})
+
+test('an English question asks for yes or no unless it asks which, how, why, where, when, who, what, or to choose', () => {
+  for (const q of ['Done.\n\nShould I continue?', 'Do you want me to push the branch?', '**Shall I open the PR?**', 'So, can I merge it?'])
+    expect(asksYesNo(q)).toBe(true)
+  for (const q of ['Which one do you prefer?', 'How should I name it?', 'What do you want?', 'Where is the file?', 'Do you prefer Kokoro or Piper?', 'Who reviews it?'])
+    expect(asksYesNo(q)).toBe(false)
+})
+
+test('in English, the band offers yes and no, and the pane reads English', { options: { language: 'en' } }, async ($, on) => {
+  on('clock.now', async () => ({ value: 1000 }))
+  const asked: Voices = { ...listening, mood: 'question', yesNo: true, asks: true }
+  on('state.get', async (_, e, next) => (e.key === 'voices' ? { value: { value: asked, version: 1 } } : next(e)))
+  const band = await $.ui.mount({
+    plugin: 'voice-avatar', surface: 'terminal', component: 'AbovePrompt',
+    props: { isWorking: false } as never,
+    viewport: { columns: 160, rows: 30 },
+  })
+  expect((await band.find({ type: 'Button', text: '👍 yes' }))?.text).toBe('👍 yes')
+  expect((await band.find({ type: 'Button', text: '👎 no' }))?.text).toBe('👎 no')
+  expect((await band.find({ type: 'Button', text: 'details' }))?.text).toBe('⤢ details')
+  const pane = await $.ui.mount({
+    plugin: 'voice-avatar', surface: 'terminal', component: 'Pane', requestId: 'voice-avatar',
+    props: { title: 'Claude', isFocused: false, bodyColumns: 40, placement: 'inline' } as never,
+    viewport: { columns: 40, rows: 12 },
+  })
+  expect((await pane.find({ type: 'Text', text: 'Last turn' }))?.text).toBe('Last turn')
+  expect((await pane.find({ type: 'Text', text: 'mic' }))?.text?.startsWith('mic   ')).toBe(true)
+})
+
+test('in English, a pane with nothing going on says so in English', { options: { language: 'en' } }, async ($, on) => {
+  on('clock.now', async () => ({ value: 1000 }))
+  const pane = await $.ui.mount({
+    plugin: 'voice-avatar', surface: 'terminal', component: 'Pane', requestId: 'voice-avatar',
+    props: { title: 'Claude', isFocused: false, bodyColumns: 40, placement: 'inline' } as never,
+    viewport: { columns: 40, rows: 8 },
+  })
+  expect((await pane.find({ type: 'Text', text: 'usage' }))?.text).toBe('usage: unavailable')
+  expect((await pane.find({ type: 'Text', text: 'listening' }))?.text).toBe('not listening')
 })

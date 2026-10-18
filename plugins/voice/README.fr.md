@@ -30,7 +30,8 @@ session Claude Code comme si vous l'aviez tapé.
 | `/listen stop` | arrête ; le micro est libéré aussitôt. Aussi `/listen pause`, `/listen resume`, `/listen status` |
 
 Tant que l'écoute tourne, une ligne au-dessus du prompt le dit (`🎙 écoute
-active … · /listen stop`), et la barre latérale de wmux aussi quand wmux est
+active … · /listen stop` en français, `🎙 listening … · /listen stop` en
+anglais), et la barre latérale de wmux aussi quand wmux est
 là. L'écoute est un enfant de la session : elle finit avec elle. whisper-stream
 tourne dans un job Windows qui le tue dès que l'écoute s'arrête, de quelque
 façon que ce soit : le micro ne reste jamais ouvert derrière. Toutes les 10 s,
@@ -40,7 +41,8 @@ s'il l'a fait.
 Ce que vous dites est pour Claude jusqu'à ce que vous disiez autre chose :
 « Top Claude » (pour Claude), « Top » (conversation ambiante, ignorée), « Top
 Gaïa » (pour l'autre agent vocal, ignorée), « Claude, pause », « Claude, arrête
-d'écouter ». Une phrase entendue pendant que Piper parle est ignorée : c'est sa
+d'écouter ». Les commandes anglaises sont comprises aussi, quelle que soit la
+`language`, car on mélange les deux (voir [En anglais](#en-anglais)). Une phrase entendue pendant que Piper parle est ignorée : c'est sa
 propre voix. Avec `autoSend` éteint (par défaut), chaque phrase attend dans le
 prompt que vous appuyiez sur Entrée.
 
@@ -54,10 +56,11 @@ Avec `/config` (ou `pluginConfigs` dans settings.json) :
 
 | Option | Défaut | Ce que c'est |
 | --- | --- | --- |
-| `language` | `fr` | la langue de whisper ; les commandes parlées sont en français |
+| `language` | `fr` | `fr` ou `en` : la langue de whisper, ce que Piper répond, la voix par défaut et tous les textes affichés ; les commandes parlées sont comprises dans les deux |
+| `voice` | vide | une voix de piper-voice ; vide : `fr_FR-siwis-medium` pour `fr`, `en_US-ljspeech-medium` pour `en`, ou la voix par défaut du service quand `PIPER_VOICE_VOICE` en fixe une |
 | `autoSend` | éteint | envoyer chaque phrase aussitôt au lieu de la laisser dans le prompt |
 | `whisperStream` | vide | `whisper-stream.exe` ; vide : cherché dans le `PATH`, sinon sous `%LOCALAPPDATA%\voice-listen` |
-| `whisperModel` | vide | un `ggml-*.bin` ; vide : le premier sous `%LOCALAPPDATA%\voice-listen\models`, large-v3-turbo d'abord |
+| `whisperModel` | vide | un `ggml-*.bin` ; vide : choisi sous `%LOCALAPPDATA%\voice-listen\models` (voir [En anglais](#en-anglais)) |
 | `callApp` | `ChatGPT` | le processus d'un autre agent vocal dont l'appel partage le micro : quand le micro de son appel est ouvert, ce que vous dites est pour lui, et sa voix n'est pas prise pour la vôtre. Vide : désactivé |
 | `sceneSayFile` | vide (éteint) | un fichier que lit une scène 3D : quand sa fenêtre Godot a le focus, les réponses y sont écrites pour sa propre voix au lieu de piper-voice |
 
@@ -81,6 +84,51 @@ modèle sous `%LOCALAPPDATA%\voice-listen` (ou indiquez-les dans les options) :
    `ggml-base.bin` charge plus vite et entend moins bien).
 
 S'il en manque un, `/listen` le dit et n'ouvre rien.
+
+## En anglais
+
+Mettez `language` à `en` (avec `/config`, ou `"language": "en"` sous
+`pluginConfigs` dans settings.json). Alors :
+
+- **Ce que vous lisez est en anglais :** la ligne au-dessus du prompt, le statut
+  wmux, les réponses et les erreurs de `/listen` et `/speak`.
+- **Ce que Piper répond est en anglais :** « Listening. » quand l'écoute démarre,
+  « Yes? » quand vous appelez Claude, « Pausing. », « I've stopped listening. »
+- **La voix est `en_US-ljspeech-medium`,** sauf si vous fixez `voice` ou le
+  `PIPER_VOICE_VOICE` du service. `piper-voice setup --english` l'installe. Si
+  le service n'a pas cette voix, la réponse est dite avec sa voix par défaut.
+- **whisper écoute de l'anglais.**
+
+Les commandes parlées marchent dans les deux langues, sans tenir compte des
+accents ni de la casse :
+
+| Vous dites | Cela veut dire |
+| --- | --- |
+| « Hey Claude », « OK Claude », « Top Claude » | ce qui suit est pour Claude |
+| « Hey Gaia », « Top Gaïa » | pour l'autre agent vocal : ignoré |
+| « Hey everyone », « Top » | conversation ambiante : ignorée |
+| « Claude, pause », « Claude, take a break », « Claude, fais une pause » | pause ; `/listen resume` (ou le bouton de voice-avatar) reprend, car une pause libère le micro |
+| « Claude, stop listening », « Claude, stop », « Claude, arrête d'écouter » | arrêt |
+
+« Hey » ou « OK » devant autre chose qu'un nom est une phrase ordinaire.
+
+**Modèles whisper anglais.** whisper.cpp publie des modèles anglais seulement,
+`ggml-tiny.en.bin`, `ggml-base.en.bin`, `ggml-small.en.bin` et
+`ggml-medium.en.bin`, sur la même page
+[ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) ; à taille
+égale, ils entendent mieux l'anglais que les multilingues. Placez-en un dans
+`%LOCALAPPDATA%\voice-listen\models\` à côté des autres. Avec `whisperModel`
+vide, l'écoute choisit parmi les `ggml-*.bin` trouvés là :
+
+1. un modèle anglais seulement (`*.en.bin`) n'est jamais pris si `language`
+   n'est pas `en` ;
+2. un modèle large-v3-turbo d'abord ;
+3. puis, pour `en`, un modèle anglais seulement ;
+4. puis le premier par nom.
+
+`whisperModel` (ou `VOICE_LISTEN_MODEL`) nomme un fichier et passe avant ce
+choix. `pwsh -File listen/Commands.Tests.ps1` vérifie les commandes, le choix du
+modèle et les mots dans les deux langues, sans micro.
 
 ## Windows seulement
 

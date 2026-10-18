@@ -1,15 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, PluginOptions, Register } from 'claude-code'
 
-import type { Heard, ListenOptions } from './speak'
-import { fingerprint, listenArgv, listenBand, listenState, loopback, parseLine, speakable } from './speak'
+import type { Heard, Lang, ListenOptions } from './speak'
+import { TEXT, errorText, fingerprint, lang, listenArgv, listenBand, listenState, loopback, parseLine, speakable, voiceFor } from './speak'
 
 // Two halves around the piper-voice service, both local:
 //   - /speak on: Claude's replies are said aloud (their first paragraph), through piper-voice on
 //     127.0.0.1, or queued for voice_courtesy.ps1 while another voice agent speaks;
 //   - /listen: the microphone, transcribed by whisper.cpp on this machine (listen/voice_listen.ps1,
 //     Windows only). Off until that command; shown above the prompt while it runs.
-// The state files under the data folders are the ones the voice-avatar plugin reads.
+// The state files under the data folders are the ones the voice-avatar plugin reads. What the
+// user reads and hears follows the language option: French for fr, English otherwise.
 
 const FRESH_MS = 3000
 const VOICE_PROMPT_MS = 5000 // a prompt the listener sent this recently does not cut Piper
@@ -65,6 +66,11 @@ async function piper($: EngineInterface, path: string, body?: unknown) {
   })
 }
 
+/** The Piper voice for the options: the voice option, else the language's unless the service picks. */
+async function voiceOf($: EngineInterface, o: PluginOptions): Promise<string> {
+  return voiceFor(str(o, 'language', 'fr'), str(o, 'voice', ''), await $.env.get('PIPER_VOICE_VOICE'))
+}
+
 /**
  * Says Claude's reply when this session asked for it (/speak on): in the 3D scene while it has
  * the focus (the sceneSayFile option), queued while another voice agent speaks, else at once.
@@ -80,22 +86,27 @@ export async function speakReply($: EngineInterface, text: string, o: PluginOpti
   await $.fs.write(session, print)
   const scene = str(o, 'sceneSayFile', '').replace(/\\/g, '/')
   if (scene && (await fresh($, `${h.listen}/focus`)) && (await $.fs.read(`${h.listen}/focus`).catch(() => '')).trim() === 'observatory') {
-    await writeWhole($, h, scene, `${language.slice(0, 2)}: ${said}`)
+    await writeWhole($, h, scene, `${lang(language)}: ${said}`)
     return 'scene'
   }
+  const voice = await voiceOf($, o)
   if (await fresh($, `${h.voice}/courtesy/alive`)) {
-    await writeWhole($, h, `${h.voice}/courtesy/pending/${Date.now()}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}.txt`, said)
+    // the voice rides in the name, <time>.<voice>.txt: the watcher reads the text as it is
+    const id = `${Date.now()}${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}`
+    await writeWhole($, h, `${h.voice}/courtesy/pending/${id}${voice ? `.${voice}` : ''}.txt`, said)
     return 'queued'
   }
-  await piper($, '/v1/say', { text: said })
+  const r = await piper($, '/v1/say', voice ? { text: said, voice } : { text: said })
+  // a voice that is not installed: said in the service's own default rather than not at all
+  if (voice && r.status === 400) await piper($, '/v1/say', { text: said })
   return 'said'
 }
 
 /** A sentence the listener heard for Claude: sent as the user's prompt, or left in the prompt box. */
-export async function deliver($: EngineInterface, heard: Heard | null, listenHome: string): Promise<string | null> {
+export async function deliver($: EngineInterface, heard: Heard | null, listenHome: string, l: Lang): Promise<string | null> {
   if (!heard) return null
   if ('error' in heard) {
-    await $.ui.toast(`/listen: ${heard.error}`)
+    await $.ui.toast(`/listen: ${errorText(heard.error, heard.where, l)}`)
     return 'error'
   }
   lastVoicePrompt = await $.clock.now()
@@ -118,8 +129,9 @@ async function shell($: EngineInterface): Promise<string> {
 /** Starts the listener, which opens the microphone: only ever from /listen. */
 export async function startListening($: EngineInterface, o: PluginOptions): Promise<string> {
   const h = await homes($)
-  if (!h.windows) return 'Listening is Windows only (whisper.cpp, Windows Core Audio): nothing was started.'
-  if (child) return 'Already listening. /listen stop releases the microphone.'
+  const l = lang(str(o, 'language', 'fr'))
+  if (!h.windows) return TEXT[l].notWindows
+  if (child) return TEXT[l].already
   const options: ListenOptions = {
     language: str(o, 'language', 'fr'),
     autoSend: flag(o, 'autoSend'),
@@ -127,6 +139,7 @@ export async function startListening($: EngineInterface, o: PluginOptions): Prom
     whisperModel: str(o, 'whisperModel', ''),
     callApp: str(o, 'callApp', 'ChatGPT'),
     scene: str(o, 'sceneSayFile', '') !== '',
+    voice: await voiceOf($, o),
   }
   const stream = $.process.spawn({ argv: listenArgv(await shell($), `${$.plugin.root}/listen/voice_listen.ps1`, options) })
   const mine: Child = { stream: stream as unknown as Child['stream'], stopAt: null }
@@ -141,10 +154,10 @@ export async function startListening($: EngineInterface, o: PluginOptions): Prom
         for (let i = rest.indexOf('\n'); i >= 0; i = rest.indexOf('\n')) {
           const line = rest.slice(0, i).trim()
           rest = rest.slice(i + 1)
-          await deliver($, parseLine(line), h.listen).catch(() => undefined)
+          await deliver($, parseLine(line), h.listen, l).catch(() => undefined)
         }
       }
-      await deliver($, parseLine(rest.trim()), h.listen).catch(() => undefined)
+      await deliver($, parseLine(rest.trim()), h.listen, l).catch(() => undefined)
     } catch {
       // it could not start, or it was stopped: the band goes either way
     } finally {
@@ -152,26 +165,26 @@ export async function startListening($: EngineInterface, o: PluginOptions): Prom
       await update($, listening, () => null).catch(() => undefined) // the session may be gone
     }
   })()
-  return `Listening starts (${options.autoSend ? 'each sentence is sent' : 'each sentence waits in the prompt box for Enter'}). Speech is transcribed on this machine. /listen stop releases the microphone.`
+  return TEXT[l].starts(options.autoSend)
 }
 
 /** Asks the listener to stop (it releases the mic at once); one that does not is killed. */
-export async function stopListening($: EngineInterface): Promise<string> {
+export async function stopListening($: EngineInterface, l: Lang): Promise<string> {
   const h = await homes($)
-  if (!child && !(await exists($, `${h.listen}/listen.pid`))) return 'Not listening.'
+  if (!child && !(await exists($, `${h.listen}/listen.pid`))) return TEXT[l].notListening
   await $.fs.write(`${h.listen}/stop`, '')
   if (child) child.stopAt = await $.clock.now()
-  return 'Listening stops; the microphone is released.'
+  return TEXT[l].stops
 }
 
-const USAGE_LISTEN = '/listen starts listening (Windows), /listen stop, /listen pause, /listen resume, /listen status'
-const USAGE_SPEAK = '/speak on says this session\'s replies aloud, /speak off, /speak stop cuts the voice, /speak shows the state'
-
 export const register: Register = (on, options) => {
+  const language = str(options, 'language', 'fr')
+  const t = TEXT[lang(language)]
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    await $.command.register({ name: 'listen', description: USAGE_LISTEN })
-    await $.command.register({ name: 'speak', description: USAGE_SPEAK })
+    await $.command.register({ name: 'listen', description: t.usageListen })
+    await $.command.register({ name: 'speak', description: t.usageSpeak })
     // While the listener runs: its state for the band, and a kill if a stop was not obeyed.
     $.clock.every(1000, async () => {
       const running = child
@@ -190,7 +203,7 @@ export const register: Register = (on, options) => {
   })
 
   on('session.end', async ($, e, next) => {
-    if (child) await stopListening($).catch(() => undefined)
+    if (child) await stopListening($, lang(language)).catch(() => undefined)
     return next(e)
   })
 
@@ -198,17 +211,17 @@ export const register: Register = (on, options) => {
     const arg = String(e.args ?? '').trim().toLowerCase()
     const h = await homes($)
     if (arg === '' || arg === 'start') return { text: await startListening($, options) }
-    if (arg === 'stop') return { text: await stopListening($) }
+    if (arg === 'stop') return { text: await stopListening($, lang(language)) }
     if (arg === 'pause' || arg === 'resume') {
-      if (!child) return { text: 'Not listening.' }
+      if (!child) return { text: t.notListening }
       await $.fs.write(`${h.listen}/pause`, arg === 'pause' ? 'paused' : 'resumed')
-      return { text: arg === 'pause' ? 'Paused: the microphone is released.' : 'Listening again.' }
+      return { text: arg === 'pause' ? t.paused : t.resumed }
     }
     if (arg === 'status') {
       const v = await read($, listening)
-      return { text: v ? listenBand(v.state, 'en') : 'Not listening: the microphone is not open.' }
+      return { text: v ? listenBand(v.state, language) : t.notListening }
     }
-    return { text: USAGE_LISTEN }
+    return { text: t.usageListen }
   })
 
   on('command.run', { command: 'speak' }, async ($, e) => {
@@ -217,20 +230,18 @@ export const register: Register = (on, options) => {
     const session = `${h.voice}/sessions/${await $.session.id()}`
     if (arg === 'on') {
       await $.fs.write(session, '')
-      return { text: 'This session\'s replies are said aloud through piper-voice (127.0.0.1). /speak off stops it.' }
+      return { text: t.speakOn }
     }
     if (arg === 'off') {
       await remove($, h, session)
-      return { text: 'This session\'s replies are no longer said aloud.' }
+      return { text: t.speakOff }
     }
     if (arg === 'stop') {
       const r = await piper($, '/v1/stop').catch(() => undefined)
-      return { text: r?.status === 200 ? 'Voice cut.' : 'piper-voice did not answer on 127.0.0.1.' }
+      return { text: r?.status === 200 ? t.cut : t.noPiper }
     }
-    if (arg !== '') return { text: USAGE_SPEAK }
-    const muted = await exists($, `${h.voice}/muted`)
-    const on_ = await exists($, session)
-    return { text: `${on_ ? 'Replies are said aloud' : 'Replies are silent'} in this session${muted ? ', but every session is muted (the muted file)' : ''}. ${USAGE_SPEAK}` }
+    if (arg !== '') return { text: t.usageSpeak }
+    return { text: `${t.speakState(await exists($, session), await exists($, `${h.voice}/muted`))} ${t.usageSpeak}` }
   })
 
   // The user speaking again (typing, or a prompt of their own) cuts Piper; a sentence the
@@ -261,7 +272,7 @@ export const register: Register = (on, options) => {
     const { Box, Text } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
-        <Text color={v.state === 'on' ? '#ff5f5f' : '#ffaf00'} weight="bold">{listenBand(v.state, str(options, 'language', 'fr'))}</Text>
+        <Text color={v.state === 'on' ? '#ff5f5f' : '#ffaf00'} weight="bold">{listenBand(v.state, language)}</Text>
         {await next(e).catch(() => null)}
       </Box>
     )

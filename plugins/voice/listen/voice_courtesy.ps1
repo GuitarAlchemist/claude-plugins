@@ -46,6 +46,7 @@ $speaking = $false
 $lastLoud = [DateTime]::MinValue
 $lastAlive = [DateTime]::MinValue
 $lastSaid = $null
+$lastVoice = ''
 $lastSaidUntil = [DateTime]::MinValue
 $piperFlag = Join-Path $dir 'piper-speaking'
 $piperOn = $false
@@ -89,7 +90,7 @@ while ($true) {
                 $cut = (Invoke-RestMethod -Method Post "$url/v1/stop" -TimeoutSec 1).stopped
                 Note ("other agent speaking (peak {0:0.000}); piper cut: {1}" -f $loud, $cut)
                 if ($cut -gt 0 -and $lastSaid -and $now -lt $lastSaidUntil) {
-                    Set-Content -Path (Join-Path $pending '0-again.txt') -Value $lastSaid -Encoding utf8 -NoNewline
+                    Set-Content -Path (Join-Path $pending $(if ($lastVoice) { "0-again.$lastVoice.txt" } else { '0-again.txt' })) -Value $lastSaid -Encoding utf8 -NoNewline
                     Note 'the cut reply is queued again'
                 }
                 $lastSaid = $null
@@ -109,9 +110,18 @@ while ($true) {
             foreach ($f in Get-ChildItem $pending -Filter *.txt | Sort-Object Name) {
                 $text = Get-Content -Raw -Encoding utf8 $f.FullName
                 Remove-Item $f.FullName
-                $body = @{ text = $text } | ConvertTo-Json -Compress
-                Invoke-RestMethod -Method Post "$url/v1/say" -ContentType 'application/json; charset=utf-8' `
-                    -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 2 | Out-Null
+                # the voice plugin names the reply <time>.<voice>.txt: said in that voice, or, when it
+                # is not installed, in the service's default
+                $voice = if ($f.BaseName -match '^[^.]+\.([A-Za-z0-9_-]+)$') { $Matches[1] } else { '' }
+                foreach ($v in @($voice, '') | Select-Object -Unique) {
+                    $body = $(if ($v) { @{ text = $text; voice = $v } } else { @{ text = $text } }) | ConvertTo-Json -Compress
+                    try {
+                        Invoke-RestMethod -Method Post "$url/v1/say" -ContentType 'application/json; charset=utf-8' `
+                            -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 2 | Out-Null
+                        break
+                    } catch { if (-not $v) { throw } }
+                }
+                $lastVoice = $voice
                 # French speech at about 12 characters a second, plus the queue ahead of it.
                 $lastSaid = $text
                 $lastSaidUntil = $now.AddSeconds(5 + $text.Length / 12)

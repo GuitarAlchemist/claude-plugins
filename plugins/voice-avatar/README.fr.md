@@ -6,7 +6,8 @@ Un petit visage au-dessus du prompt, et un panneau détaillé, pour le plugin
 [voice](../voice/README.fr.md) : qui a la parole (Piper qui parle pour Claude,
 un autre agent vocal, une scène 3D), si Claude écoute et pour qui, le niveau du
 micro, ce qu'est devenue la dernière phrase entendue, et ce que fait Claude
-(l'outil en cours, la durée du tour, les jetons et le quota consommés).
+(l'outil en cours, la durée du tour, les jetons et le quota consommés). Ses
+libellés sont en français ou en anglais, selon son option `language`.
 
 ```text
 /plugin install voice-avatar --marketplace GuitarAlchemist/claude-plugins
@@ -29,11 +30,26 @@ bandeau montre encore ce que fait Claude et ce que la session consomme.
 
 | Option | Défaut | Ce que c'est |
 | --- | --- | --- |
+| `language` | `fr` | `fr` ou `en` : les libellés, les boutons et le panneau. Mettez la même que la `language` du plugin voice : chaque plugin a la sienne |
 | `faceFile` | vide (éteint) | un fichier JSON qu'une scène 3D lit pour refléter l'avatar : `{v, t, state, tool, session}`, l'état parmi idle, working, waiting, done, failed, et le nom de l'outil, jamais un prompt, un argument ni un chemin |
 | `faceSession` | `Claude` | la `session` que nomme ce fichier |
+
+## En anglais
+
+Mettez `language` à `en` (avec `/config`, ou `"language": "en"` dans l'entrée
+`pluginConfigs` de ce plugin), et la `language` du plugin voice à `en` aussi.
+Le bandeau et le panneau sont alors en anglais : `mic` et `voice` pour les
+vu-mètres, `listening`, `I hear you`, `🔊 Piper speaking`, `✓ received`,
+`· not for me`, `Last turn`, `context … · 5 h quota … · week …`, et les
+boutons `👍 yes` (raccourci `y`), `👎 no` (`n`), `⏸ pause` / `▶ resume` (`p`),
+`⏹ stop` (`s`) et `⤢ details` (`d`). En français, les raccourcis sont `o` pour
+oui et `a` pour arrêter. Les boutons oui/non apparaissent après une question
+anglaise comme après une française (« Should I push it? »), pas après une
+question qui demande lequel, comment, pourquoi, où, quand, qui, quoi, ou de
+choisir (« Kokoro or Piper? »).
 
 ## Tests
 
 `claude plugin test plugins/voice-avatar` : le visage, les libellés, le
-vu-mètre, le bandeau et le panneau, à partir d'états fixés, sans lire de
-fichier.
+vu-mètre, le bandeau et le panneau, en français et en anglais, à partir d'états
+fixés, sans lire de fichier.

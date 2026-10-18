@@ -1,10 +1,16 @@
 {
   "name": "voice-avatar",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "An avatar band above the prompt and a detailed pane for the voice plugin: who speaks (Piper, another voice agent, a 3D scene), whether Claude listens and to whom, the microphone's level, and what Claude is doing. It only reads the voice plugin's local state files",
   "author": { "name": "Stephane Pareilleux" },
   "types": "./types/index.d.ts",
   "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "fr or en: the language of the band and the pane (French for fr, English otherwise). Set it as the voice plugin's language option",
+      "default": "fr"
+    },
     "faceFile": {
       "type": "string",
       "title": "3D bot face file",

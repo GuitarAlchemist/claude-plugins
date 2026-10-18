@@ -40,18 +40,19 @@ Claude, handed to this Claude Code session as if you had typed it.
 | `/listen` | opens the microphone and starts listening (Windows only). **Off by default**: nothing listens until you run it |
 | `/listen stop` | stops; the microphone is released at once. Also `/listen pause`, `/listen resume`, `/listen status` |
 
-While the listener runs, a line above the prompt says so (`🎙 écoute active … ·
-/listen stop`), and the wmux sidebar too when wmux is there. The listener is a
+While the listener runs, a line above the prompt says so (`🎙 listening … ·
+/listen stop` in English, `🎙 écoute active … · /listen stop` in French), and
+the wmux sidebar too when wmux is there. The listener is a
 child of the session: it ends with it, and whisper-stream runs in a Windows job
 that kills it whenever the listener ends, so the microphone is never left open.
 The listener also checks every 10 s that whisper-stream opened no socket, and
 stops if it did.
 
-What you say is for Claude until you say otherwise, in French: "Top Claude"
-(for Claude), "Top" (ambient talk, dropped), "Top Gaïa" (for the other voice
-agent, dropped), "Claude, pause", "Claude, arrête d'écouter". Sentences heard
-while Piper speaks are dropped as Piper's own voice. With `autoSend` off (the
-default) each sentence waits in the prompt box for Enter.
+What you say is for Claude until you say otherwise. The spoken commands are
+understood in English and in French whatever `language` is, since people mix
+them (see [In English](#in-english) for the list). Sentences heard while Piper
+speaks are dropped as Piper's own voice. With `autoSend` off (the default) each
+sentence waits in the prompt box for Enter.
 
 A sentence goes to Claude, and a reply to Piper, only in the session that asked:
 `/speak on` writes `sessions/<session id>` in piper-voice's data folder; the file
@@ -63,10 +64,11 @@ Set with `/config` (or `pluginConfigs` in settings.json):
 
 | Option | Default | What it is |
 | --- | --- | --- |
-| `language` | `fr` | whisper's language; the spoken commands are French |
+| `language` | `fr` | `fr` or `en`: whisper's language, what Piper says back, the default voice and every text shown; the spoken commands are understood in both |
+| `voice` | empty | a piper-voice voice id; empty: `en_US-ljspeech-medium` for `en`, `fr_FR-siwis-medium` for `fr`, or the service's default when `PIPER_VOICE_VOICE` sets one |
 | `autoSend` | off | send each sentence at once instead of leaving it in the prompt box |
 | `whisperStream` | empty | `whisper-stream.exe`; empty: found on `PATH`, else under `%LOCALAPPDATA%\voice-listen` |
-| `whisperModel` | empty | a `ggml-*.bin`; empty: the first under `%LOCALAPPDATA%\voice-listen\models`, large-v3-turbo first |
+| `whisperModel` | empty | a `ggml-*.bin`; empty: picked under `%LOCALAPPDATA%\voice-listen\models` (see [In English](#in-english)) |
 | `callApp` | `ChatGPT` | the process of another voice agent whose call shares the mic: while its call's mic is open, what you say is for it, and its voice is not taken for yours. Empty turns it off |
 | `sceneSayFile` | empty (off) | a file a 3D scene reads: while its Godot window has the focus, replies are written there for its own voice instead of piper-voice |
 
@@ -89,6 +91,48 @@ The plugin downloads nothing. Put whisper.cpp's Windows build and one model unde
    `ggml-base.bin` load faster and hear less well).
 
 When either is missing, `/listen` says so and opens nothing.
+
+### In English
+
+Set `language` to `en` (with `/config`, or `"language": "en"` under
+`pluginConfigs` in settings.json). Then:
+
+- **What you read is English:** the band above the prompt, the wmux status, the
+  replies and errors of `/listen` and `/speak`.
+- **What Piper says back is English:** "Listening." when the listener starts,
+  "Yes?" when you call Claude, "Pausing.", "I've stopped listening."
+- **The voice is `en_US-ljspeech-medium`,** unless you set `voice` or the
+  service's `PIPER_VOICE_VOICE`. `piper-voice setup --english` installs it. If
+  the service does not have the voice, the reply is said in its default voice.
+- **whisper listens for English.**
+
+The spoken commands work in both languages, accents and case aside:
+
+| You say | It means |
+| --- | --- |
+| "Hey Claude", "OK Claude", "Top Claude" | what follows is for Claude |
+| "Hey Gaia", "Top Gaïa" | for the other voice agent: dropped |
+| "Hey everyone", "Top" | ambient talk: dropped |
+| "Claude, pause", "Claude, take a break", "Claude, fais une pause" | pause; `/listen resume` (or the voice-avatar button) resumes, since a pause releases the microphone |
+| "Claude, stop listening", "Claude, stop", "Claude, arrête d'écouter" | stop |
+
+"Hey" or "OK" before anything but a name is an ordinary sentence.
+
+**English whisper models.** whisper.cpp ships English-only models, `ggml-tiny.en.bin`,
+`ggml-base.en.bin`, `ggml-small.en.bin` and `ggml-medium.en.bin`, from the same
+[ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) page; for
+the same size they hear English better than the multilingual ones. Put one in
+`%LOCALAPPDATA%\voice-listen\models\` beside the others. With `whisperModel`
+empty, the listener picks among the `ggml-*.bin` found there:
+
+1. an English-only model (`*.en.bin`) is never used unless `language` is `en`;
+2. a large-v3-turbo model first;
+3. then, for `en`, an English-only model;
+4. then the first by name.
+
+`whisperModel` (or `VOICE_LISTEN_MODEL`) names one file and overrides that
+choice. `pwsh -File listen/Commands.Tests.ps1` checks the commands, the model
+choice and the words in both languages, with no microphone.
 
 ### Windows only
 

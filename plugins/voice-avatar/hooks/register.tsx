@@ -16,6 +16,26 @@ const KEPT_LEVELS = 100 // the pane's 20 s, shown as wide as the pane is
 const KEPT = 8 // utterances and steps the pane lists
 const USAGE_POLLS = 10 // the cost is read every 10th poll, 2 s
 
+/** What the avatar writes in: the language option, French for fr, English otherwise. */
+export type Lang = 'fr' | 'en'
+export const lang = (language: string): Lang => (language.trim().toLowerCase().startsWith('fr') ? 'fr' : 'en')
+
+// The words of the band and the pane, beside the labels below.
+const WORDS = {
+  fr: {
+    rest: 'au repos', yes: 'Oui', no: 'Non', yesButton: '👍 oui', noButton: '👎 non', pause: '⏸ pause', resume: '▶ reprendre',
+    stop: '⏹ arrêter', details: '⤢ détails', paused: 'Écoute en pause', resumed: "J'écoute à nouveau", stopped: 'Écoute arrêtée',
+    off: 'écoute arrêtée', mic: 'micro', voices: 'voix  ', running: 'Tour en cours', last: 'Dernier tour', noTool: 'aucun outil',
+    heard: 'Dernières phrases', nothing: 'rien encore depuis le chargement', yesKey: 'o', stopKey: 'a',
+  },
+  en: {
+    rest: 'at rest', yes: 'Yes', no: 'No', yesButton: '👍 yes', noButton: '👎 no', pause: '⏸ pause', resume: '▶ resume',
+    stop: '⏹ stop', details: '⤢ details', paused: 'Listening paused', resumed: 'Listening again', stopped: 'Listening stopped',
+    off: 'not listening', mic: 'mic  ', voices: 'voice ', running: 'Turn running', last: 'Last turn', noTool: 'no tool',
+    heard: 'Last sentences', nothing: 'nothing yet since loading', yesKey: 'y', stopKey: 's',
+  },
+} as const
+
 // A peak this loud is a voice, not the room (-26 dB).
 export const HEARD = 0.05
 const BARS = '▁▂▃▄▅▆▇█'
@@ -84,12 +104,13 @@ export function asksQuestion(text: string): boolean {
   return /\?[\s*_`»"')\]]*$/.test(lines[lines.length - 1] ?? '')
 }
 
-// What opens a question no yes or no answers: which, how, why, where, when, who, what, or a choice.
-const LEADING = /^(?:(?:et|alors|donc|mais|bon|sinon|ok|d['’]accord|bref|ensuite|puis|enfin)\b[\s,]*)+/iu
-const OPENS = /^(?:(?:à|de|d['’]|avec|pour|par|dans|sur|en|chez|depuis)\s*)?(?:qu['’]|(?:quel(?:le)?s?|lequel|laquelle|lesquel(?:le)?s|comment|pourquoi|combien|où|quand|qui|que|quoi)(?![\p{L}-]))/iu
-const ENDS_OPEN = /(?:^|[\s'’-])(?:quoi|où|quand|comment|combien|pourquoi|qui|lequel|laquelle|lesquel(?:le)?s)\s*\?$/iu
-const WHICH = /(?:^|[\s'’-])(?:quel(?:le)?s?|lequel|laquelle|lesquel(?:le)?s)(?![\p{L}-])/iu
-const CHOICE = /\sou\s(?!pas\b|non\b)/iu
+// What opens a question no yes or no answers: which, how, why, where, when, who, what, or a choice;
+// in French and in English, whatever the language option (a reply can be in either).
+const LEADING = /^(?:(?:et|alors|donc|mais|bon|sinon|ok|okay|d['’]accord|bref|ensuite|puis|enfin|and|so|then|well|also|now)\b[\s,]*)+/iu
+const OPENS = /^(?:(?:à|de|d['’]|avec|pour|par|dans|sur|en|chez|depuis|to|from|with|for|in|on|at|by)\s*)?(?:qu['’]|(?:quel(?:le)?s?|lequel|laquelle|lesquel(?:le)?s|comment|pourquoi|combien|où|quand|qui|que|quoi|what|which|how|why|where|when|who|whom|whose)(?![\p{L}-]))/iu
+const ENDS_OPEN = /(?:^|[\s'’-])(?:quoi|où|quand|comment|combien|pourquoi|qui|lequel|laquelle|lesquel(?:le)?s|what|which|how|why|where|when|who|whom)\s*\?$/iu
+const WHICH = /(?:^|[\s'’-])(?:quel(?:le)?s?|lequel|laquelle|lesquel(?:le)?s|which)(?![\p{L}-])/iu
+const CHOICE = /\s(?:ou|or)\s(?!pas\b|non\b|not\b)/iu
 
 /** Whether an answer ends on a question its reader answers by yes or no ("Tu veux que je continue ?"). */
 export function asksYesNo(text: string): boolean {
@@ -230,18 +251,32 @@ export function bigFace(v: Voices | null, isWorking: boolean): [string, string, 
 export type Work = { tool: string | null; toolMs: number; turnMs: number }
 
 /** The first row: who has the floor and what Claude does, in the order they matter. */
-export function labels(v: Voices | null, work: Work | null): string[] {
+const LABELS = {
+  fr: {
+    piper: '🔊 Piper parle', observatory: '🔭 Observatoire parle', loading: '⏳ je me prépare à écouter', hears: "je t'entends",
+    listens: "j'écoute", unknown: '❓ écoute : état inconnu', asks: "j'ai une question pour toi", oops: "😕 ça n'a pas marché",
+    thinks: 'je réfléchis', turn: 'tour',
+  },
+  en: {
+    piper: '🔊 Piper speaking', observatory: '🔭 Observatory speaking', loading: '⏳ getting ready to listen', hears: 'I hear you',
+    listens: 'listening', unknown: '❓ listening: state unknown', asks: 'I have a question for you', oops: "😕 that didn't work",
+    thinks: 'thinking', turn: 'turn',
+  },
+} as const
+
+export function labels(v: Voices | null, work: Work | null, l: Lang = 'fr'): string[] {
+  const t = LABELS[l]
   const out: string[] = []
-  if (v?.piper) out.push('🔊 Piper parle')
-  if (v?.observatory) out.push('🔭 Observatoire parle')
-  if (v?.listen === 'loading') out.push('⏳ je me prépare à écouter')
-  if (v?.listen === 'on') out.push(hears(v) ? "je t'entends" : "j'écoute")
-  if (v?.listen === 'unknown') out.push('❓ écoute : état inconnu')
-  if (v?.asks) out.push("j'ai une question pour toi")
-  if (!work && v?.mood === 'oops') out.push("😕 ça n'a pas marché")
+  if (v?.piper) out.push(t.piper)
+  if (v?.observatory) out.push(t.observatory)
+  if (v?.listen === 'loading') out.push(t.loading)
+  if (v?.listen === 'on') out.push(hears(v) ? t.hears : t.listens)
+  if (v?.listen === 'unknown') out.push(t.unknown)
+  if (v?.asks) out.push(t.asks)
+  if (!work && v?.mood === 'oops') out.push(t.oops)
   if (work) {
-    const doing = work.tool ? `${work.tool} ${elapsed(work.toolMs)}` : 'je réfléchis'
-    out.push(`${doing} · tour ${elapsed(work.turnMs)}`)
+    const doing = work.tool ? `${work.tool} ${elapsed(work.toolMs)}` : t.thinks
+    out.push(`${doing} · ${t.turn} ${elapsed(work.turnMs)}`)
   }
   return out
 }
@@ -276,23 +311,23 @@ export function questionMark(v: Voices | null): { ground: string | undefined; co
   return v.pulse ? { ground: QUESTION_COLOR, color: '#ffffff' } : { ground: undefined, color: QUESTION_COLOR }
 }
 
-const TO: Record<Voices['target'], string> = {
-  claude: '→ maintenant pour Claude',
-  gaia: '→ maintenant pour Gaïa',
-  ambient: "→ maintenant ambiant : rien n'est envoyé",
+const TO: Record<Lang, Record<Voices['target'], string>> = {
+  fr: { claude: '→ maintenant pour Claude', gaia: '→ maintenant pour Gaïa', ambient: "→ maintenant ambiant : rien n'est envoyé" },
+  en: { claude: '→ now for Claude', gaia: '→ now for Gaia', ambient: '→ now ambient: nothing is sent' },
 }
 
 /** For 3 s after the target changed, where what is said goes now. */
-export function moveLine(v: Voices | null): string | null {
-  return v?.moved && v.listen === 'on' ? TO[v.target] : null
+export function moveLine(v: Voices | null, l: Lang = 'fr'): string | null {
+  return v?.moved && v.listen === 'on' ? TO[l][v.target] : null
 }
 
 /**
  * The call's own microphone is open while the listener runs: what is said for Claude, or to
  * the room, reaches Gaïa's call too (and leaves the machine with it).
  */
-export function callWarning(v: Voices | null): string | null {
-  return v?.listen === 'on' && v.callOpen && v.target !== 'gaia' ? "⚠ micro de l'appel ouvert : Gaïa entend aussi" : null
+export function callWarning(v: Voices | null, l: Lang = 'fr'): string | null {
+  if (v?.listen !== 'on' || !v.callOpen || v.target === 'gaia') return null
+  return l === 'fr' ? "⚠ micro de l'appel ouvert : Gaïa entend aussi" : "⚠ the call's mic is open: Gaia hears too"
 }
 
 /** A small block after the ear: it blinks while Claude listens to the user, else none. */
@@ -302,20 +337,21 @@ export function cursor(v: Voices | null): string | null {
 }
 
 /** The pause, where the ear stands while listening: nothing is heard until it is lifted. */
-export function pausedMark(v: Voices | null): string | null {
-  return v?.listen === 'paused' ? '❚❚ en pause' : null
+export function pausedMark(v: Voices | null, l: Lang = 'fr'): string | null {
+  return v?.listen === 'paused' ? (l === 'fr' ? '❚❚ en pause' : '❚❚ paused') : null
 }
 
-/** A price in dollars the French way: "1,23 $". */
-export function dollars(usd: number): string {
-  return `${usd.toFixed(2).replace('.', ',')} $`
+/** A price in dollars, the French way ("1,23 $") or the English one ("$1.23"). */
+export function dollars(usd: number, l: Lang = 'fr'): string {
+  return l === 'fr' ? `${usd.toFixed(2).replace('.', ',')} $` : `$${usd.toFixed(2)}`
 }
 
-/** A token count the French way: "850", "12 k", "1,4 M". */
-export function tokens(n: number): string {
+/** A token count: "850", "12 k", "1,4 M" in French, "1.4 M" in English. */
+export function tokens(n: number, l: Lang = 'fr'): string {
   if (n < 1000) return String(n)
   if (n < 1e6) return `${Math.round(n / 1000)} k`
-  return `${(n / 1e6).toFixed(1).replace('.', ',')} M`
+  const m = (n / 1e6).toFixed(1)
+  return `${l === 'fr' ? m.replace('.', ',') : m} M`
 }
 
 /**
@@ -323,24 +359,29 @@ export function tokens(n: number): string {
  * the quota windows, and the API price. Quota windows are reported to a subscription only, and
  * a subscription is not billed by the token: then the price is marked as not billed.
  */
-export function costLine(u: Usage | null): string {
+export function costLine(u: Usage | null, l: Lang = 'fr'): string {
+  const fr = l === 'fr'
   const parts: string[] = []
-  if (u?.context != null) parts.push(`contexte ${Math.round(u.context)} %`)
-  if (u?.fiveHour != null) parts.push(`quota 5 h ${Math.round(u.fiveHour)} %`)
-  if (u?.sevenDay != null) parts.push(`semaine ${Math.round(u.sevenDay)} %`)
+  if (u?.context != null) parts.push(`${fr ? 'contexte' : 'context'} ${Math.round(u.context)} %`)
+  if (u?.fiveHour != null) parts.push(`${fr ? 'quota 5 h' : '5 h quota'} ${Math.round(u.fiveHour)} %`)
+  if (u?.sevenDay != null) parts.push(`${fr ? 'semaine' : 'week'} ${Math.round(u.sevenDay)} %`)
   const subscribed = u?.fiveHour != null || u?.sevenDay != null
-  if (u?.usd != null) parts.push(subscribed ? `équiv. API ${dollars(u.usd)}, non facturé` : `prix API ≈ ${dollars(u.usd)}`)
-  return parts.length ? parts.join(' · ') : 'consommation : indisponible'
+  if (u?.usd != null) {
+    const price = dollars(u.usd, l)
+    parts.push(subscribed ? (fr ? `équiv. API ${price}, non facturé` : `API equiv. ${price}, not billed`) : (fr ? `prix API ≈ ${price}` : `API price ≈ ${price}`))
+  }
+  return parts.length ? parts.join(' · ') : fr ? 'consommation : indisponible' : 'usage: unavailable'
 }
 
 /** The tokens of the main loop's turn: what its requests read, and what they generated. */
-export function turnTokens(u: Usage | null): string | null {
-  return u && u.turnIn + u.turnOut > 0 ? `${tokens(u.turnIn)} lus · ${tokens(u.turnOut)} générés` : null
+export function turnTokens(u: Usage | null, l: Lang = 'fr'): string | null {
+  if (!u || u.turnIn + u.turnOut === 0) return null
+  return l === 'fr' ? `${tokens(u.turnIn, l)} lus · ${tokens(u.turnOut, l)} générés` : `${tokens(u.turnIn, l)} read · ${tokens(u.turnOut, l)} generated`
 }
 
 /** Gaïa as a blue earth: "♁ parle" while she speaks, "♁" alone while her call's mic is open. */
-export function gaiaMark(v: Voices | null): string | null {
-  if (v?.gaia) return '♁ parle'
+export function gaiaMark(v: Voices | null, l: Lang = 'fr'): string | null {
+  if (v?.gaia) return l === 'fr' ? '♁ parle' : '♁ speaking'
   return v?.callOpen ? '♁' : null
 }
 export const GAIA_COLOR = '#5fafff'
@@ -352,33 +393,43 @@ export type Place = { icon: string; name: string; on: boolean }
  * The three, lit where what the user says actually goes: Gaïa while her call has the mic (the
  * listener is off then, whatever its target), none while paused; null when it is off or unsure.
  */
-export function places(v: Voices | null): Place[] | null {
+export function places(v: Voices | null, l: Lang = 'fr'): Place[] | null {
   if (v?.listen !== 'on' && v?.listen !== 'gaia' && v?.listen !== 'paused') return null
   const goes = v.listen === 'gaia' ? 'gaia' : v.listen === 'paused' ? null : v.target
   return [
-    { icon: '∿', name: 'ambiant', on: goes === 'ambient' },
-    { icon: '♁', name: 'Gaïa', on: goes === 'gaia' },
+    { icon: '∿', name: l === 'fr' ? 'ambiant' : 'ambient', on: goes === 'ambient' },
+    { icon: '♁', name: l === 'fr' ? 'Gaïa' : 'Gaia', on: goes === 'gaia' },
     { icon: '✻', name: 'Claude', on: goes === 'claude' },
   ]
 }
 
-const SAID: Record<Outcome, string> = {
-  sent: '✓ reçu',
-  typed: '✓ tapé : Entrée pour envoyer',
-  ignored: '· pas pour moi',
-  piper: "· c'était ma voix",
-  dropped: '· ignoré : la voix de Gaïa',
-  held: "· pas envoyé : une question est ouverte à l'écran",
+const SAID: Record<Lang, Record<Outcome, string>> = {
+  fr: {
+    sent: '✓ reçu',
+    typed: '✓ tapé : Entrée pour envoyer',
+    ignored: '· pas pour moi',
+    piper: "· c'était ma voix",
+    dropped: '· ignoré : la voix de Gaïa',
+    held: "· pas envoyé : une question est ouverte à l'écran",
+  },
+  en: {
+    sent: '✓ received',
+    typed: '✓ typed: Enter to send',
+    ignored: '· not for me',
+    piper: '· that was my voice',
+    dropped: "· ignored: Gaia's voice",
+    held: '· not sent: a question is open on screen',
+  },
 }
 
 /** What became of the last utterance, for 5 s. */
-export function outcome(v: Voices | null): string | null {
-  return v?.last ? SAID[v.last] : null
+export function outcome(v: Voices | null, l: Lang = 'fr'): string | null {
+  return v?.last ? SAID[l][v.last] : null
 }
 
 /** One line of the pane's history: what became of an utterance, and how long ago. */
-export function heardLine(h: Heard, now: number): string {
-  return `${SAID[h.what]} · il y a ${elapsed(now - h.at)}`
+export function heardLine(h: Heard, now: number, l: Lang = 'fr'): string {
+  return l === 'fr' ? `${SAID.fr[h.what]} · il y a ${elapsed(now - h.at)}` : `${SAID.en[h.what]} · ${elapsed(now - h.at)} ago`
 }
 
 /** One line of the pane's steps: done or running, the tool, its time. */
@@ -403,13 +454,13 @@ export function same(a: Voices | null, b: Voices): boolean {
 }
 
 // voice_listen.ps1 reads these files every second (pause) or every 200 ms (stop).
-function controls($: EngineInterface) {
+function controls($: EngineInterface, l: Lang) {
   return {
     pause: (word: string, said: string) => () => {
       void $.fs.write(`${listenHome}/pause`, word).then(() => $.ui.toast(said))
     },
     stop: () => {
-      void $.fs.write(`${listenHome}/stop`, '').then(() => $.ui.toast('Écoute arrêtée'))
+      void $.fs.write(`${listenHome}/stop`, '').then(() => $.ui.toast(WORDS[l].stopped))
     },
     // the user's own answer, pressed by the user: submitted as their words
     answer: (word: string) => () => {
@@ -423,6 +474,8 @@ const option = (o: PluginOptions, key: string, fallback: string) => (typeof o[ke
 export const register: Register = (on, options) => {
   const faceFile = option(options, 'faceFile', '').replace(/\\/g, '/')
   const faceSession = option(options, 'faceSession', 'Claude')
+  const l = lang(option(options, 'language', 'fr'))
+  const w = WORDS[l]
 
   on('session.start', async ($, e, next) => {
     const started = await next(e)
@@ -584,21 +637,21 @@ export const register: Register = (on, options) => {
     const { Box, Text, Button } = $.ui.resolve(e)
     const [eyes, mouth] = face(v, e.props.isWorking)
     const color = tint(v, e.props.isWorking)
-    const parts = labels(v, work)
-    const { pause, stop, answer } = controls($)
+    const parts = labels(v, work, l)
+    const { pause, stop, answer } = controls($, l)
     const running = listenHome !== '' && v !== null && v.listen !== 'off'
     const answers = offersAnswers(v, e.props.isWorking)
     const listenEar = ear(v)
     const ringColor = earColor(v)
     const blinkCursor = cursor(v)
-    const held = pausedMark(v)
-    const gaia = gaiaMark(v)
-    const where = places(v)
-    const done = outcome(v)
-    const spent = costLine(await read($, usage))
+    const held = pausedMark(v, l)
+    const gaia = gaiaMark(v, l)
+    const where = places(v, l)
+    const done = outcome(v, l)
+    const spent = costLine(await read($, usage), l)
     const ask = questionMark(v)
-    const moving = moveLine(v)
-    const warning = callWarning(v)
+    const moving = moveLine(v, l)
+    const warning = callWarning(v, l)
 
     return (
       <Box flexDirection="column">
@@ -608,7 +661,7 @@ export const register: Register = (on, options) => {
           {ask ? <Text backgroundColor={ask.ground} color={ask.color} weight="bold"> ? </Text> : null}
           {work ? <Text color={SPIN_COLORS[(v?.spin ?? 0) % SPIN_COLORS.length]} weight="bold"> {SPIN[v?.spin ?? 0]}</Text> : null}
           {gaia ? <Text color={GAIA_COLOR} weight="bold"> {gaia}</Text> : null}
-          <Text dimColor> · {parts.length ? parts.join(' · ') : gaia ? '' : 'au repos'}</Text>
+          <Text dimColor> · {parts.length ? parts.join(' · ') : gaia ? '' : w.rest}</Text>
         </Box>
         <Box>
           <Text color={color} weight="bold">{` ${mouth} `}</Text>
@@ -626,14 +679,14 @@ export const register: Register = (on, options) => {
         <Box>
           <Text>{'        '}</Text>
           {answers && ask ? <Text backgroundColor={ask.ground} color={ask.color} weight="bold"> ? </Text> : null}
-          {answers ? <Button hotkey="o" dimColor={!v?.pulse} onPress={answer('Oui')}>👍 oui</Button> : null}
-          {answers ? <Button hotkey="n" dimColor={!v?.pulse} onPress={answer('Non')}>👎 non</Button> : null}
+          {answers ? <Button hotkey={w.yesKey} dimColor={!v?.pulse} onPress={answer(w.yes)}>{w.yesButton}</Button> : null}
+          {answers ? <Button hotkey="n" dimColor={!v?.pulse} onPress={answer(w.no)}>{w.noButton}</Button> : null}
           {moving ? <Text color={LIT} weight="bold">{moving} </Text> : null}
           {done ? <Text color={v?.wink ? WINK_COLOR : undefined} dimColor={!v?.wink}>{done} </Text> : null}
-          {running && v.listen === 'paused' ? <Button hotkey="p" onPress={pause('resumed', "J'écoute à nouveau")}>▶ reprendre</Button> : null}
-          {running && v.listen !== 'paused' ? <Button hotkey="p" dimColor onPress={pause('paused', 'Écoute en pause')}>⏸ pause</Button> : null}
-          {running ? <Button hotkey="a" dimColor onPress={stop}>⏹ arrêter</Button> : null}
-          <Button hotkey="d" dimColor onPress={() => void $.ui.open({ id: PANE, title: 'Claude', columns: 40, rows: 26 })}>⤢ détails</Button>
+          {running && v.listen === 'paused' ? <Button hotkey="p" onPress={pause('resumed', w.resumed)}>{w.resume}</Button> : null}
+          {running && v.listen !== 'paused' ? <Button hotkey="p" dimColor onPress={pause('paused', w.paused)}>{w.pause}</Button> : null}
+          {running ? <Button hotkey={w.stopKey} dimColor onPress={stop}>{w.stop}</Button> : null}
+          <Button hotkey="d" dimColor onPress={() => void $.ui.open({ id: PANE, title: 'Claude', columns: 40, rows: 26 })}>{w.details}</Button>
           <Text dimColor> {spent}</Text>
         </Box>
         {/* what the other plugins show there, the voice plugin's listening line among them */}
@@ -655,19 +708,19 @@ export const register: Register = (on, options) => {
     const work = workingSince !== null
       ? { tool: t?.name ?? null, toolMs: t ? now - t.since : 0, turnMs: now - workingSince }
       : null
-    const parts = labels(v, work)
-    const { pause, stop, answer } = controls($)
+    const parts = labels(v, work, l)
+    const { pause, stop, answer } = controls($, l)
     const running = listenHome !== '' && v !== null && v.listen !== 'off'
     const answers = offersAnswers(v, isWorking)
     const spin = v?.spin ?? 0
     const u = await read($, usage)
-    const held = pausedMark(v)
-    const gaia = gaiaMark(v)
-    const where = places(v)
-    const read_ = turnTokens(u)
+    const held = pausedMark(v, l)
+    const gaia = gaiaMark(v, l)
+    const where = places(v, l)
+    const read_ = turnTokens(u, l)
     const ask = questionMark(v)
-    const moving = moveLine(v)
-    const warning = callWarning(v)
+    const moving = moveLine(v, l)
+    const warning = callWarning(v, l)
     // What matters first, so a short inline pane still shows it: who listens, the turn, the cost.
     const rows = e.viewport?.rows ?? 24
     const roomy = e.props.placement === 'dock' && rows >= 24
@@ -688,7 +741,7 @@ export const register: Register = (on, options) => {
           {ask ? <Text backgroundColor={ask.ground} color={ask.color} weight="bold"> ? </Text> : null}
           {work ? <Text color={SPIN_COLORS[spin % SPIN_COLORS.length]} weight="bold"> {SPIN[spin]}</Text> : null}
           {gaia ? <Text color={GAIA_COLOR} weight="bold"> {gaia}</Text> : null}
-          <Text dimColor> · {parts.length ? parts.join(' · ') : 'au repos'}</Text>
+          <Text dimColor> · {parts.length ? parts.join(' · ') : w.rest}</Text>
         </Box>
         {where ? (
           <Box>
@@ -697,30 +750,30 @@ export const register: Register = (on, options) => {
             {held ? <Text color={PAUSE_COLOR} weight="bold">{held}</Text> : null}
             {where.map(p => <Text color={p.on ? LIT : undefined} backgroundColor={p.on && v?.moved && v.pulse ? '#005f00' : undefined} dimColor={!p.on}>{`  ${p.icon} ${p.name}`}</Text>)}
           </Box>
-        ) : <Text dimColor>écoute arrêtée</Text>}
+        ) : <Text dimColor>{w.off}</Text>}
         {moving ? <Text color={LIT} weight="bold">{moving}</Text> : null}
         {warning ? <Text color={PAUSE_COLOR}>{warning}</Text> : null}
-        {v?.listen === 'on' ? <Text color={hears(v) ? '#5fff5f' : '#5f875f'}>micro {meter(v.levels, width)}</Text> : null}
+        {v?.listen === 'on' ? <Text color={hears(v) ? '#5fff5f' : '#5f875f'}>{w.mic} {meter(v.levels, width)}</Text> : null}
         {v && (v.listen === 'on' || v.spoke.some(Boolean)) ? (
           <Box>
-            <Text color={speaking ? VOICE_COLORS[speaking] : undefined} dimColor={!speaking}>{'voix  '}</Text>
+            <Text color={speaking ? VOICE_COLORS[speaking] : undefined} dimColor={!speaking}>{w.voices}</Text>
             {voiceRuns(v.spoke, width).map(run => <Text color={run.who ? VOICE_COLORS[run.who] : undefined} dimColor={!run.who}>{run.text}</Text>)}
           </Box>
         ) : null}
-        <Text weight="bold">{work ? `Tour en cours · ${elapsed(work.turnMs)}` : 'Dernier tour'}{read_ ? <Text dimColor> · {read_}</Text> : null}</Text>
-        {shownSteps.length ? shownSteps.map(s => <Text dimColor={s.ms !== null}>{stepLine(s, now, spin)}</Text>) : <Text dimColor>aucun outil</Text>}
-        <Text dimColor>{costLine(u)}</Text>
-        <Text weight="bold">Dernières phrases</Text>
+        <Text weight="bold">{work ? `${w.running} · ${elapsed(work.turnMs)}` : w.last}{read_ ? <Text dimColor> · {read_}</Text> : null}</Text>
+        {shownSteps.length ? shownSteps.map(s => <Text dimColor={s.ms !== null}>{stepLine(s, now, spin)}</Text>) : <Text dimColor>{w.noTool}</Text>}
+        <Text dimColor>{costLine(u, l)}</Text>
+        <Text weight="bold">{w.heard}</Text>
         {shownHeard.length
-          ? shownHeard.map(said => <Text dimColor={said.what !== 'sent' && said.what !== 'typed'}>{heardLine(said, now)}</Text>)
-          : <Text dimColor>rien encore depuis le chargement</Text>}
+          ? shownHeard.map(said => <Text dimColor={said.what !== 'sent' && said.what !== 'typed'}>{heardLine(said, now, l)}</Text>)
+          : <Text dimColor>{w.nothing}</Text>}
         <Box>
           {answers && ask ? <Text backgroundColor={ask.ground} color={ask.color} weight="bold"> ? </Text> : null}
-          {answers ? <Button hotkey="o" dimColor={!v?.pulse} onPress={answer('Oui')}>👍 oui</Button> : null}
-          {answers ? <Button hotkey="n" dimColor={!v?.pulse} onPress={answer('Non')}>👎 non</Button> : null}
-          {running && v.listen === 'paused' ? <Button hotkey="p" onPress={pause('resumed', "J'écoute à nouveau")}>▶ reprendre</Button> : null}
-          {running && v.listen !== 'paused' ? <Button hotkey="p" dimColor onPress={pause('paused', 'Écoute en pause')}>⏸ pause</Button> : null}
-          {running ? <Button hotkey="a" dimColor onPress={stop}>⏹ arrêter</Button> : null}
+          {answers ? <Button hotkey={w.yesKey} dimColor={!v?.pulse} onPress={answer(w.yes)}>{w.yesButton}</Button> : null}
+          {answers ? <Button hotkey="n" dimColor={!v?.pulse} onPress={answer(w.no)}>{w.noButton}</Button> : null}
+          {running && v.listen === 'paused' ? <Button hotkey="p" onPress={pause('resumed', w.resumed)}>{w.resume}</Button> : null}
+          {running && v.listen !== 'paused' ? <Button hotkey="p" dimColor onPress={pause('paused', w.paused)}>{w.pause}</Button> : null}
+          {running ? <Button hotkey={w.stopKey} dimColor onPress={stop}>{w.stop}</Button> : null}
           {/* one glyph: with ▶ reprendre and ⏹ arrêter the full word took the 41st column */}
           <Button hotkey="r" dimColor onPress={() => void $.ui.close({ id: PANE })}>⤡</Button>
         </Box>

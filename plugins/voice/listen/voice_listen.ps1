@@ -1,22 +1,26 @@
 ﻿# voice_listen.ps1: hands-free dictation for one Claude Code session, transcribed on this machine.
 # Windows only (Core Audio, UI Automation, whisper.cpp's Windows build).
 #
-#   voice_listen.ps1 [-AutoSend] [-Language fr] [-Whisper <whisper-stream.exe>] [-Model <ggml-*.bin>]
+#   voice_listen.ps1 [-AutoSend] [-Language fr|en] [-Voice <piper voice>] [-Whisper <whisper-stream.exe>] [-Model <ggml-*.bin>]
 #   voice_listen.ps1 -Stop                       # stop; the mic is released at once
 #
 # The voice plugin's /listen command starts it and reads its standard output: one JSON line per
 # sentence for Claude, {"said": "...", "send": true|false}, which the plugin submits as a prompt
-# (send) or puts in the prompt box for the user to send. A line {"error": "..."} says why it could
-# not start. It never starts by itself.
+# (send) or puts in the prompt box for the user to send. A line {"error": "<code>", "where": "..."}
+# says why it could not start (no-whisper, no-model, already). It never starts by itself.
 #
 # whisper-stream (whisper.cpp, local) hears the microphone and finds the utterances. Who they are
-# for is the user's to say, and it holds until the user says otherwise:
-#   "Top Claude"  everything after is for Claude; Piper answers "Oui ?"
-#   "Top Gaïa"    everything after is for the other voice agent (-CallApp): dropped here
-#   "Top"         an ambient conversation: dropped here
+# for is the user's to say, and it holds until the user says otherwise. The spoken commands are
+# understood in French and in English whatever -Language is, since people mix them:
+#   "Top Claude", "Hey Claude"        everything after is for Claude; Piper answers "Oui ?"/"Yes?"
+#   "Top Gaïa", "Hey Gaia"            everything after is for the other voice agent (-CallApp): dropped here
+#   "Top", "Hey everyone"             an ambient conversation: dropped here
 # A name in a sentence does not change who it is for; a start is for Claude (-StartTarget).
-# "Claude, pause" pauses: the mic is released until the pause file says otherwise (the avatar's
-# resume button). "Claude, arrête d'écouter" (or "Claude, stop") stops listening.
+# "Claude, pause" (or "Claude, take a break") pauses: the mic is released until the pause file
+# says otherwise (/listen resume, the avatar's button: no voice can resume, the mic is closed).
+# "Claude, arrête d'écouter", "Claude, stop listening" (or "Claude, stop") stops listening.
+# What Piper says back and what the wmux sidebar shows follow -Language: French for fr, English
+# otherwise; -Voice is the Piper voice it asks for (empty: the service's default).
 #
 # Rules:
 #   - audio never leaves the machine and is never written to disk; only the text of an
@@ -48,6 +52,7 @@ param(
     [switch]$AutoSend,
     [switch]$Stop,
     [string]$Language = 'fr',
+    [string]$Voice = '',
     [string]$Whisper = $env:VOICE_LISTEN_WHISPER,
     [string]$Model = $env:VOICE_LISTEN_MODEL,
     [string]$CallApp = 'ChatGPT',
@@ -63,6 +68,8 @@ if ($Stop) { New-Item -ItemType File -Force $stopFile | Out-Null; return }
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
 function Emit($fields) { [Console]::Out.WriteLine(($fields | ConvertTo-Json -Compress)); [Console]::Out.Flush() }
 New-Item -ItemType Directory -Force $root | Out-Null
+. (Join-Path $PSScriptRoot 'Commands.ps1')   # the spoken commands, the model choice, the words
+$words = Get-Words $Language
 
 # For the avatar: state is "loading", "on" or "paused", rewritten every second; level is the
 # microphone's peak, rewritten every 200 ms while listening; last is what became of the last
@@ -87,11 +94,12 @@ if (-not $Whisper) {
         (Get-ChildItem $root -Recurse -Filter whisper-stream.exe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName }
 }
 if (-not $Model) {
-    $models = @(Get-ChildItem (Join-Path $root 'models') -Filter 'ggml-*.bin' -ErrorAction SilentlyContinue)
-    $Model = ($models | Sort-Object { $_.Name -notlike '*large-v3-turbo*' }, Name | Select-Object -First 1).FullName
+    $models = Join-Path $root 'models'
+    $name = Select-Model @(Get-ChildItem $models -Filter 'ggml-*.bin' -ErrorAction SilentlyContinue | ForEach-Object Name) $Language
+    $Model = if ($name) { Join-Path $models $name } else { $null }
 }
-if (-not $Whisper -or -not (Test-Path -LiteralPath $Whisper)) { Emit @{ error = "whisper-stream.exe not found: put whisper.cpp's Windows build under $root, or set the whisperStream option" }; exit 1 }
-if (-not $Model -or -not (Test-Path -LiteralPath $Model)) { Emit @{ error = "no whisper model: put a ggml-*.bin under $(Join-Path $root 'models'), or set the whisperModel option" }; exit 1 }
+if (-not $Whisper -or -not (Test-Path -LiteralPath $Whisper)) { Emit @{ error = 'no-whisper'; where = $root }; exit 1 }
+if (-not $Model -or -not (Test-Path -LiteralPath $Model)) { Emit @{ error = 'no-model'; where = (Join-Path $root 'models') }; exit 1 }
 if ($Threads -le 0) { $Threads = [Math]::Max(2, [Math]::Min(12, [Environment]::ProcessorCount)) }
 
 # One listener at a time: two would send each utterance twice, and the first to stop would
@@ -100,7 +108,7 @@ $pidFile = Join-Path $root 'listen.pid'
 $other = 0; try { $other = [int][IO.File]::ReadAllText($pidFile).Trim() } catch { }
 if ($other -and $other -ne $PID) {
     $p = Get-CimInstance Win32_Process -Filter "ProcessId = $other" -ErrorAction SilentlyContinue
-    if ($p -and $p.CommandLine -match 'voice_listen\.ps1') { Emit @{ error = "already listening (pid $other): stop it first" }; exit 1 }
+    if ($p -and $p.CommandLine -match 'voice_listen\.ps1') { Emit @{ error = 'already'; where = "$other" }; exit 1 }
 }
 Remove-Item $stopFile, $pauseFile -ErrorAction SilentlyContinue
 Set-Content $pidFile $PID
@@ -117,20 +125,19 @@ Add-Type -Namespace VoiceListen -Name Focus -MemberDefinition @'
 [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr window, System.Text.StringBuilder text, int count);
 '@
 
-# whisper often hears "Claude" as "Cloud" or "Clode", and "Gaïa" as "Gaya".
-$wake = '^\W*(claude|cloud|clode|clod|claud|klaud|klod)\b[\s,.:;!?-]*'
-$pause = '^(pause|fais une pause)\W*$'
-$halt = "^(stop|arr[eê]te[sz]?( d.[ée]couter| l.[ée]coute)?)\W*$"
-$top = '^\W*(top|tope|tops|toppe)\b[\s,.:;!?-]*'
-$gaia = '^\W*(ga[iïy]a|ga[iï]e|ka[iï]a)\b[\s,.:;!?-]*'
 $wmux = [bool](Get-Command wmux -ErrorAction SilentlyContinue)
 
 function Note([string]$what) { Add-Content -Path $log -Value ("{0} {1}" -f (Get-Date -Format s), $what) -Encoding utf8 }
+function SayIn([string]$text, [string]$voice) {
+    $body = if ($voice) { @{ text = $text; voice = $voice } } else { @{ text = $text } }
+    Invoke-RestMethod -Method Post "$url/v1/say" -ContentType 'application/json; charset=utf-8' `
+        -Body ([Text.Encoding]::UTF8.GetBytes(($body | ConvertTo-Json -Compress))) -TimeoutSec 2 | Out-Null
+}
+# In -Voice, else (a voice that is not installed) in the service's default rather than not at all.
 function Say([string]$text) {
-    try {
-        Invoke-RestMethod -Method Post "$url/v1/say" -ContentType 'application/json; charset=utf-8' `
-            -Body ([Text.Encoding]::UTF8.GetBytes((@{ text = $text } | ConvertTo-Json -Compress))) -TimeoutSec 2 | Out-Null
-    } catch { Note "voice: $($_.Exception.Message)" }
+    try { SayIn $text $Voice } catch {
+        try { if ($Voice) { SayIn $text '' } else { throw } } catch { Note "voice: $($_.Exception.Message)" }
+    }
 }
 function Status([string]$text) { if ($wmux) { wmux set-status listen $text 2>&1 | Out-Null } }
 # The avatar's files are only a display: a write that fails (the mod is reading) waits for the next.
@@ -269,18 +276,18 @@ try {
             if ($held) {
                 if ($buffer -and (Flush) -eq 'gone') { break }
                 if ($stream) { $stream.Stop(); $stream = $null }
-                if ($state -ne 'paused') { $state = 'paused'; Status '⏸ écoute en pause'; Note 'paused by the user' }
+                if ($state -ne 'paused') { $state = 'paused'; Status $words.paused; Note 'paused by the user' }
             } elseif (-not $stream) {
                 $stream = New-Object VoiceListen.Stream($Whisper, "-m `"$Model`" -l $Language -t $Threads --step 0 --length 15000 -vth 0.6 -mt 160")
                 $lastNet = [DateTime]::MinValue
-                $state = 'loading'; Status '⏳ écoute : chargement'
+                $state = 'loading'; Status $words.loading
                 Note "loading (whisper-stream pid $($stream.Proc.Id), in a job: $($stream.Jailed); call: $call)"
             }
         }
         # "J'écoute" only once whisper really captures, not while its model loads
         if ($stream -and $state -eq 'loading' -and $stream.AudioStart -ne [DateTime]::MinValue) {
-            $state = 'on'; Status '🎙 écoute active'; Put $stateFile $state
-            Note "listening, $([int]($stream.AudioStart - $stream.Proc.StartTime).TotalMilliseconds) ms after the start"; Say "J'écoute."
+            $state = 'on'; Status $words.on; Put $stateFile $state
+            Note "listening, $([int]($stream.AudioStart - $stream.Proc.StartTime).TotalMilliseconds) ms after the start"; Say $words.listening
         }
         if ($stream -and $state -eq 'on') {
             $mic = [AudioPeek.Peek]::MicPeak(); Put $levelFile ('{0:0.000}' -f $mic)
@@ -315,19 +322,17 @@ try {
                     elseif ((Covered $gaiaLoud $from $to) -ge $third) { $over = 'dropped' }
                 }
                 $text = $u.Text
-                # "Claude, pause" and "Claude, arrête d'écouter" work whoever the user speaks to
-                $order = if ($text -match $wake) { $text -replace $wake, '' } elseif ($text -match $top -and ($text -replace $top, '') -match $wake) { ($text -replace $top, '') -replace $wake, '' } else { $null }
-                if ($null -ne $order -and ($order -match $halt -or $order -match $pause) -and $buffer) { if ((Flush) -eq 'gone') { break } }
-                if ($null -ne $order -and $order -match $halt) { Note 'stop asked by voice'; New-Item -ItemType File -Force $stopFile | Out-Null; break }
-                if ($null -ne $order -and $order -match $pause) { Note 'pause asked by voice'; Put $pauseFile 'paused'; Say 'Je fais une pause.'; break }
-                if ($text -match $top) {
+                # "Claude, pause" and "Claude, stop listening" work whoever the user speaks to (Commands.ps1)
+                $order = Get-Order $text
+                if ($order -and $buffer) { if ((Flush) -eq 'gone') { break } }
+                if ($order -eq 'halt') { Note 'stop asked by voice'; New-Item -ItemType File -Force $stopFile | Out-Null; break }
+                if ($order -eq 'pause') { Note 'pause asked by voice'; Put $pauseFile 'paused'; Say $words.pausing; break }
+                $aimed = Get-Switch $text
+                if ($aimed) {
                     if ($buffer -and (Flush) -eq 'gone') { break }   # what came before "Top" was for Claude
-                    $after = $text -replace $top, ''; $was = $target
-                    if ($after -match $wake) { $target = 'claude'; $rest = $after -replace $wake, '' }
-                    elseif ($after -match $gaia) { $target = 'gaia'; $rest = '' }
-                    else { $target = 'ambient'; $rest = '' }
+                    $was = $target; $target = $aimed.target; $rest = $aimed.rest
                     Put $targetFile $target; Note "now for $target (was $was)$(if ($over) { ', heard over a voice' })"
-                    if ($target -eq 'claude') { Say 'Oui ?' }
+                    if ($target -eq 'claude') { Say $words.yes }
                     if (-not $rest.Trim() -or $over) { continue }
                 } elseif ($over -eq 'piper') { $dropped++; Put $lastFile 'piper'; Note "dropped an utterance heard while Piper played ($facts)"; continue }
                 elseif ($over) { $dropped++; Put $lastFile 'dropped'; Note "dropped an utterance heard while the other agent spoke ($facts)"; continue }
@@ -337,7 +342,7 @@ try {
                 # whisper writes the sounds it cannot read as "[Musique]" or "(rires)": never a prompt
                 if ($rest -match '^\s*[\[(][^\])]*[\])]\W*$') { $dropped++; Put $lastFile 'ignored'; Note 'dropped a non-speech mark'; continue }
                 # what whisper, trained on video subtitles, invents on noise or silence (the user never said it)
-                if ($rest -match "^\W*(merci( beaucoup| à tous)?( d.avoir regard[ée].*)?|sous-titr.*|.*amara\.org.*)\W*$") {
+                if (Test-Hallucination $rest) {
                     $dropped++; Put $lastFile 'ignored'; Note 'dropped a known whisper hallucination'; continue }
                 # "..." or a lone mark: whisper heard a breath or a noise, not words
                 if ($rest -notmatch '\p{L}') { $dropped++; Put $lastFile 'ignored'; Note 'dropped an utterance with no words'; continue }
@@ -361,7 +366,7 @@ try {
     if ($buffer) { Note "dropped $pieces held piece(s) at the stop" }
     Status ''
     Note "stopped: $sent handed over, $dropped dropped"
-    Say "J'arrête d'écouter."
+    Say $words.stopped
     # who the user spoke to ends with the listener: a later start is -StartTarget (claude) again
     Remove-Item $stopFile, $stateFile, $levelFile, $lastFile, $targetFile, $callFile, $typedFile, $pauseFile, $focusFile, $pidFile -ErrorAction SilentlyContinue
 }
