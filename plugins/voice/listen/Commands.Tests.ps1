@@ -62,6 +62,8 @@ Check 'fr yes' $fr.yes 'Oui ?'
 Check 'fr listening' $fr.listening "J'écoute."
 Check 'en yes' $en.yes 'Yes?'
 Check 'en listening' $en.listening 'Listening.'
+Check 'fr listening, ambient start' $fr.listeningTop "J'écoute. Dis « Top Claude » pour me parler."
+Check 'en listening, ambient start' $en.listeningTop 'Listening. Say "Hey Claude" to talk to me.'
 Check 'en pausing' $en.pausing 'Pausing.'
 Check 'en stopped' $en.stopped "I've stopped listening."
 Check 'en status' $en.on '🎙 listening'

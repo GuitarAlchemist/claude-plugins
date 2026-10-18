@@ -112,6 +112,10 @@ accents ni de la casse :
 
 « Hey » ou « OK » devant autre chose qu'un nom est une phrase ordinaire.
 
+L'écoute démarre en conversation ambiante : rien ne part vers Claude, donc rien
+ne coûte de prompt, jusqu'à ce que vous disiez « Top Claude » ou « Hey
+Claude ». Piper le rappelle quand l'écoute démarre.
+
 **Modèles whisper anglais.** whisper.cpp publie des modèles anglais seulement,
 `ggml-tiny.en.bin`, `ggml-base.en.bin`, `ggml-small.en.bin` et
 `ggml-medium.en.bin`, sur la même page

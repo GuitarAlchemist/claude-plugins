@@ -15,7 +15,7 @@
 #   "Top Claude", "Hey Claude"        everything after is for Claude; Piper answers "Oui ?"/"Yes?"
 #   "Top Gaïa", "Hey Gaia"            everything after is for the other voice agent (-CallApp): dropped here
 #   "Top", "Hey everyone"             an ambient conversation: dropped here
-# A name in a sentence does not change who it is for; a start is for Claude (-StartTarget).
+# A name in a sentence does not change who it is for; a start is ambient (-StartTarget).
 # "Claude, pause" (or "Claude, take a break") pauses: the mic is released until the pause file
 # says otherwise (/listen resume, the avatar's button: no voice can resume, the mic is closed).
 # "Claude, arrête d'écouter", "Claude, stop listening" (or "Claude, stop") stops listening.
@@ -58,7 +58,9 @@ param(
     [string]$CallApp = 'ChatGPT',
     [switch]$Scene,
     [string]$SceneWindow = 'Observatory*',
-    [ValidateSet('ambient', 'claude', 'gaia')][string]$StartTarget = 'claude'
+    # ambient: nothing reaches Claude before "Top Claude" / "Hey Claude", so talk around the
+    # microphone costs nothing (the user, 2026-10-18); -StartTarget claude starts for Claude
+    [ValidateSet('ambient', 'claude', 'gaia')][string]$StartTarget = 'ambient'
 )
 $ErrorActionPreference = 'Stop'
 if ($CallApp -eq 'none') { $CallApp = '' }   # the plugin passes 'none' rather than an empty argument
@@ -287,7 +289,8 @@ try {
         # "J'écoute" only once whisper really captures, not while its model loads
         if ($stream -and $state -eq 'loading' -and $stream.AudioStart -ne [DateTime]::MinValue) {
             $state = 'on'; Status $words.on; Put $stateFile $state
-            Note "listening, $([int]($stream.AudioStart - $stream.Proc.StartTime).TotalMilliseconds) ms after the start"; Say $words.listening
+            Note "listening, $([int]($stream.AudioStart - $stream.Proc.StartTime).TotalMilliseconds) ms after the start"
+            Say $(if ($target -eq 'ambient') { $words.listeningTop } else { $words.listening })
         }
         if ($stream -and $state -eq 'on') {
             $mic = [AudioPeek.Peek]::MicPeak(); Put $levelFile ('{0:0.000}' -f $mic)
@@ -367,6 +370,6 @@ try {
     Status ''
     Note "stopped: $sent handed over, $dropped dropped"
     Say $words.stopped
-    # who the user spoke to ends with the listener: a later start is -StartTarget (claude) again
+    # who the user spoke to ends with the listener: a later start is -StartTarget (ambient) again
     Remove-Item $stopFile, $stateFile, $levelFile, $lastFile, $targetFile, $callFile, $typedFile, $pauseFile, $focusFile, $pidFile -ErrorAction SilentlyContinue
 }

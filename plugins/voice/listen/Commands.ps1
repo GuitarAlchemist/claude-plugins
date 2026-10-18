@@ -56,10 +56,12 @@ function Select-Model([string[]]$names, [string]$language) {
 # What the listener says aloud and shows in the wmux sidebar: French for fr, English otherwise.
 function Get-Words([string]$language) {
     if ($language -like 'fr*') {
-        @{ listening = "J'écoute."; yes = 'Oui ?'; pausing = 'Je fais une pause.'; stopped = "J'arrête d'écouter."
+        @{ listening = "J'écoute."; listeningTop = "J'écoute. Dis « Top Claude » pour me parler."; yes = 'Oui ?'
+           pausing = 'Je fais une pause.'; stopped = "J'arrête d'écouter."
            loading = '⏳ écoute : chargement'; on = '🎙 écoute active'; paused = '⏸ écoute en pause' }
     } else {
-        @{ listening = 'Listening.'; yes = 'Yes?'; pausing = 'Pausing.'; stopped = "I've stopped listening."
+        @{ listening = 'Listening.'; listeningTop = 'Listening. Say "Hey Claude" to talk to me.'; yes = 'Yes?'
+           pausing = 'Pausing.'; stopped = "I've stopped listening."
            loading = '⏳ listening: loading'; on = '🎙 listening'; paused = '⏸ listening paused' }
     }
 }

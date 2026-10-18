@@ -118,6 +118,10 @@ The spoken commands work in both languages, accents and case aside:
 
 "Hey" or "OK" before anything but a name is an ordinary sentence.
 
+Listening starts as ambient talk: nothing reaches Claude, so nothing costs a
+prompt, until you say "Hey Claude" or "Top Claude". Piper says so when it
+starts listening.
+
 **English whisper models.** whisper.cpp ships English-only models, `ggml-tiny.en.bin`,
 `ggml-base.en.bin`, `ggml-small.en.bin` and `ggml-medium.en.bin`, from the same
 [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp) page; for
