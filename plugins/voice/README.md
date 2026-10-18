@@ -19,6 +19,104 @@ MCP server (`piper-voice mcp`: tools `say`, `stop`, `voices`, `status`). IX driv
 the same service through the `ix-voice` crate. All of them follow the contract
 below.
 
+[Français](README.fr.md)
+
+```text
+/plugin marketplace add GuitarAlchemist/claude-plugins
+/plugin install voice@guitaralchemist
+```
+
+## Full duplex: /speak and /listen
+
+Everything stays on the machine. The voice is Piper, reached on 127.0.0.1 only
+(a `PIPER_VOICE_URL` that is not loopback is ignored). Speech-to-text is
+whisper.cpp, run locally. No audio and no text is sent anywhere by this plugin:
+the only thing that leaves the listener is the text of a sentence addressed to
+Claude, handed to this Claude Code session as if you had typed it.
+
+| Command | What it does |
+| --- | --- |
+| `/speak on` | this session's replies are said aloud: their first prose paragraph, without code, links or paths |
+| `/speak off` | they are not; `/speak stop` cuts the voice now; `/speak` shows the state |
+| `/listen` | opens the microphone and starts listening (Windows only). **Off by default**: nothing listens until you run it |
+| `/listen stop` | stops; the microphone is released at once. Also `/listen pause`, `/listen resume`, `/listen status` |
+
+While the listener runs, a line above the prompt says so (`🎙 écoute active … ·
+/listen stop`), and the wmux sidebar too when wmux is there. The listener is a
+child of the session: it ends with it, and whisper-stream runs in a Windows job
+that kills it whenever the listener ends, so the microphone is never left open.
+The listener also checks every 10 s that whisper-stream opened no socket, and
+stops if it did.
+
+What you say is for Claude until you say otherwise, in French: "Top Claude"
+(for Claude), "Top" (ambient talk, dropped), "Top Gaïa" (for the other voice
+agent, dropped), "Claude, pause", "Claude, arrête d'écouter". Sentences heard
+while Piper speaks are dropped as Piper's own voice. With `autoSend` off (the
+default) each sentence waits in the prompt box for Enter.
+
+A sentence goes to Claude, and a reply to Piper, only in the session that asked:
+`/speak on` writes `sessions/<session id>` in piper-voice's data folder; the file
+`muted` beside it silences every session.
+
+### Options
+
+Set with `/config` (or `pluginConfigs` in settings.json):
+
+| Option | Default | What it is |
+| --- | --- | --- |
+| `language` | `fr` | whisper's language; the spoken commands are French |
+| `autoSend` | off | send each sentence at once instead of leaving it in the prompt box |
+| `whisperStream` | empty | `whisper-stream.exe`; empty: found on `PATH`, else under `%LOCALAPPDATA%\voice-listen` |
+| `whisperModel` | empty | a `ggml-*.bin`; empty: the first under `%LOCALAPPDATA%\voice-listen\models`, large-v3-turbo first |
+| `callApp` | `ChatGPT` | the process of another voice agent whose call shares the mic: while its call's mic is open, what you say is for it, and its voice is not taken for yours. Empty turns it off |
+| `sceneSayFile` | empty (off) | a file a 3D scene reads: while its Godot window has the focus, replies are written there for its own voice instead of piper-voice |
+
+Environment: `PIPER_VOICE_HOME` (piper-voice's data folder), `VOICE_LISTEN_HOME`
+(the listener's, by default `%LOCALAPPDATA%\voice-listen`), `PIPER_VOICE_URL`
+(loopback only), `VOICE_LISTEN_WHISPER` and `VOICE_LISTEN_MODEL`.
+
+### Setting up whisper (Windows)
+
+The plugin downloads nothing. Put whisper.cpp's Windows build and one model under
+`%LOCALAPPDATA%\voice-listen` (or point the options at them):
+
+1. A release zip of [whisper.cpp](https://github.com/ggml-org/whisper.cpp/releases)
+   with `whisper-stream.exe`, for example `whisper-blas-bin-x64.zip`, unpacked
+   anywhere under `%LOCALAPPDATA%\voice-listen`. Check its SHA-256 against the
+   release.
+2. A model in `%LOCALAPPDATA%\voice-listen\models\`, from
+   [ggerganov/whisper.cpp](https://huggingface.co/ggerganov/whisper.cpp), for
+   example `ggml-large-v3-turbo-q5_0.bin` (about 550 MB; smaller ones such as
+   `ggml-base.bin` load faster and hear less well).
+
+When either is missing, `/listen` says so and opens nothing.
+
+### Windows only
+
+`/listen` (`listen/voice_listen.ps1` with `Listen.cs` and `AudioPeek.cs`: Core
+Audio, UI Automation, a job object) and the courtesy watcher run on Windows only.
+Elsewhere `/listen` answers that it is Windows only and starts nothing; `/speak`
+and the MCP tools work wherever piper-voice runs.
+
+### The courtesy watcher (optional, Windows)
+
+`listen/voice_courtesy.ps1` keeps Piper from talking over another voice agent's
+app (`-Others`, by default ChatGPT). It reads output levels only, never the
+microphone. While it runs, replies wait in `courtesy\pending\` until the other
+agent is quiet, and `courtesy\piper-speaking` tells the voice-avatar plugin when
+Piper plays. Start one per machine, by hand:
+
+```powershell
+Start-Process -WindowStyle Hidden pwsh "-NoProfile -File `"<plugin>\listen\voice_courtesy.ps1`""
+```
+
+### State files
+
+Under the listener's folder, rewritten while it runs and removed when it stops:
+`state`, `level`, `last`, `target`, `call`, `focus`, `typed`, `listen.pid`;
+`pause` and `stop` are read. `listen.log` records events, lengths and latencies,
+never what was said. The voice-avatar plugin reads these files.
+
 ## HTTP contract v0.2
 
 | Method and path | Body | Answer |
@@ -155,3 +253,6 @@ cd plugins/voice/service
 go test ./...              # no Piper, no sound card: a fake piper, a fake player, an in-memory MCP client
 go test -tags nooto ./...  # without the audio library, as on a machine without sound
 ```
+
+The module in `hooks/` is tested with fakes, without a microphone, PowerShell
+or piper-voice: `claude plugin test plugins/voice`.

@@ -1,0 +1,21 @@
+{
+  "name": "voice-avatar",
+  "version": "0.1.0",
+  "description": "An avatar band above the prompt and a detailed pane for the voice plugin: who speaks (Piper, another voice agent, a 3D scene), whether Claude listens and to whom, the microphone's level, and what Claude is doing. It only reads the voice plugin's local state files",
+  "author": { "name": "Stephane Pareilleux" },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "faceFile": {
+      "type": "string",
+      "title": "3D bot face file",
+      "description": "Off when empty (the default). A JSON file a 3D scene polls to mirror the avatar: Claude's state (idle, working, waiting, done, failed) and its tool's name, never a prompt, an argument or a path",
+      "default": ""
+    },
+    "faceSession": {
+      "type": "string",
+      "title": "Session name in the face file",
+      "description": "The name the face file gives this session",
+      "default": "Claude"
+    }
+  }
+}
