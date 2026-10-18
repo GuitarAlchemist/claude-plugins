@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { SharedRepoGuardPr, SharedRepoGuardPrCi } from '../types'
-import { COLOR, FIELDS, GLYPH, needsAttention, REPOS, toRow } from './pr-rows'
+import { COLOR, FIELDS, GLYPH, needsAttention, NO_REPOS, parseRepos, toRow } from './pr-rows'
 import type { GhPr } from './pr-rows'
 import { firstViolation, listing, probeFor, repoOf, scriptPaths, windowsPath, withoutComments } from './rules'
 import type { Hit } from './rules'
@@ -10,9 +10,16 @@ import type { Hit } from './rules'
 // Everything that reaches the engine is in this file: the engine follows `$` only into functions
 // declared here, which is how `claude plugin validate` can list all the module does.
 
-// Where the lanes keep the one-heavy-command-at-a-time lock (`mkdir heavy.lock`, an `owner` file inside).
-const LANES =
-  'C:/Users/spare/AppData/Local/Temp/claude/C--Users-spare-source-repos/19b0bdae-e53e-4487-9b0c-42fcb0440719/scratchpad/lanes'
+// Where the lanes keep the one-heavy-command-at-a-time lock (`mkdir heavy.lock`, an `owner` file inside):
+// the `lanesDir` option, else `lanes` in the user's Claude Code folder.
+async function lanesDir($: EngineInterface, option: unknown): Promise<string | undefined> {
+  const set = String(option ?? '').trim()
+  if (set) return set.replace(/\\/g, '/').replace(/\/+$/, '')
+  const config = await $.env.get('CLAUDE_CONFIG_DIR')
+  if (config) return `${config.replace(/\\/g, '/').replace(/\/+$/, '')}/lanes`
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  return home ? `${home.replace(/\\/g, '/')}/.claude/lanes` : undefined
+}
 
 // ---- The guard: a matching command is held for the user's answer, with what it would touch ----
 
@@ -133,10 +140,13 @@ async function guarded($: EngineInterface, command: unknown): Promise<string | u
 
 // ---- /lanes: the heavy lock and the newest claims row of each lane ----
 
-async function lanes($: EngineInterface): Promise<string> {
+async function lanes($: EngineInterface, option: unknown): Promise<string> {
   const lines: string[] = []
-  const lock = `${LANES}/heavy.lock`
-  if (await $.fs.exists(lock)) {
+  const dir = await lanesDir($, option)
+  const lock = `${dir}/heavy.lock`
+  if (!dir) {
+    lines.push('Heavy lock: no lanes folder (no home folder found); set the `lanesDir` option')
+  } else if (await $.fs.exists(lock)) {
     let who = '(no owner file)'
     try {
       who = (await $.fs.read(`${lock}/owner`)).trim()
@@ -150,9 +160,9 @@ async function lanes($: EngineInterface): Promise<string> {
     } catch {
       // released meanwhile
     }
-    lines.push(`Heavy lock: held by ${who}${age}`)
+    lines.push(`Heavy lock: held by ${who}${age} (${lock})`)
   } else {
-    lines.push('Heavy lock: free')
+    lines.push(`Heavy lock: free (${lock})`)
   }
 
   // The eight lanes written to last, one row each: a lane that logs every step would otherwise fill the list.
@@ -192,14 +202,14 @@ const meta = atom({ plugin: 'shared-repo-guard', key: 'prsMeta' } as const, { is
 const expanded = atom({ plugin: 'shared-repo-guard', key: 'prsExpanded' } as const, '')
 const filter = atom({ plugin: 'shared-repo-guard', key: 'prsFilter' } as const, 'all')
 
-async function refreshPrs($: EngineInterface): Promise<void> {
+async function refreshPrs($: EngineInterface, repos: string[]): Promise<void> {
   if ((await read($, meta)).isLoading) return
   await update($, meta, m => ({ ...m, isLoading: true }))
   const errors: string[] = []
   const rows: SharedRepoGuardPr[] = []
   try {
     await Promise.all(
-      REPOS.map(async repo => {
+      repos.map(async repo => {
         try {
           const r = await $.process.run(
             ['gh', 'pr', 'list', '-R', repo, '--state', 'open', '--author', '@me', '--limit', '100', '--json', FIELDS],
@@ -223,7 +233,9 @@ async function refreshPrs($: EngineInterface): Promise<void> {
   }
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const repos = parseRepos(options.repos)
+
   // The matcher picks the tool; the input's type is still every tool's, hence `guarded` takes unknown.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     const deny = await guarded($, e.command)
@@ -242,21 +254,23 @@ export const register: Register = on => {
     })
     await $.command.register({
       name: 'prs',
-      description: 'Pane of your open PRs (learn, ga, ix, Demerzel) and their CI, read on demand',
+      description: 'Pane of your open PRs in the repositories of the `repos` option, and their CI, read on demand',
     })
     return next(e)
   })
 
-  on('command.run', { command: 'lanes' }, async $ => ({ text: await lanes($) }))
+  on('command.run', { command: 'lanes' }, async $ => ({ text: await lanes($, options.lanesDir) }))
 
   on('command.run', { command: 'prs' }, async $ => {
+    if (repos.length === 0) return { text: NO_REPOS }
     await $.ui.open({ id: PRS_PANE, title: 'PRs' })
-    await refreshPrs($)
+    await refreshPrs($, repos)
     return { text: 'PR pane open: R refreshes, F shows only what needs attention.' }
   })
 
   on('ui.render', { component: 'Pane', requestId: PRS_PANE }, async ($, e) => {
     const { Box, Text, Button, Link } = $.ui.resolve(e)
+    if (repos.length === 0) return <Text dimColor>{NO_REPOS}</Text>
     const rows = await read($, prs)
     const m = await read($, meta)
     const onlyTodo = (await read($, filter)) === 'todo'
@@ -330,7 +344,7 @@ export const register: Register = on => {
             hotkey="r"
             variant="primary"
             label={m.isLoading ? 'Reading…' : 'Refresh'}
-            onPress={() => refreshPrs($)}
+            onPress={() => refreshPrs($, repos)}
           />
           <Text> </Text>
           <Button

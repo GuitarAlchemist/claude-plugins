@@ -23,8 +23,8 @@
     },
     {
       "name": "shared-repo-guard",
-      "version": "0.2.1",
-      "description": "Holds blanket git commands in the shared clones for the user's confirmation, with what they would touch; adds /lanes and a /prs pane of open pull requests and their CI",
+      "version": "0.3.0",
+      "description": "Holds blanket git commands in the shared clones for the user's confirmation, with what they would touch; adds /lanes and a /prs pane of open pull requests in the repositories you list, and their CI",
       "source": "./plugins/shared-repo-guard",
       "category": "productivity"
     },
