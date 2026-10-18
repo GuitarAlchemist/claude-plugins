@@ -1,13 +1,58 @@
 {
   "name": "voice",
-  "version": "0.1.0",
-  "description": "Lets Claude speak aloud through piper-voice, a local streaming text-to-speech service on Piper: sentence by sentence, with barge-in, on 127.0.0.1 only",
+  "version": "0.3.0",
+  "description": "Full-duplex local voice: Claude speaks through piper-voice, a local streaming text-to-speech service on Piper (127.0.0.1 only), says its replies with /speak on, and hears you with /listen, transcribed on this machine by whisper.cpp (listening is Windows only and off until /listen)",
   "author": { "name": "Stephane Pareilleux" },
+  "types": "./types/index.d.ts",
   "mcpServers": {
     "voice": {
       "type": "stdio",
       "command": "${LOCALAPPDATA}/piper-voice/bin/piper-voice.exe",
       "args": ["mcp"]
+    }
+  },
+  "userConfig": {
+    "language": {
+      "type": "string",
+      "title": "Language",
+      "description": "fr or en: the language whisper transcribes, Piper speaks (its voice, unless the voice option or PIPER_VOICE_VOICE picks one) and every message is written in. The spoken commands are understood in both (Top Claude / Hey Claude, Claude pause, Claude arrête d'écouter / Claude stop listening)",
+      "default": "fr"
+    },
+    "autoSend": {
+      "type": "boolean",
+      "title": "Send each sentence heard",
+      "description": "On: each sentence heard for Claude is sent as a prompt at once. Off (the default): it waits in the prompt box until you press Enter",
+      "default": false
+    },
+    "whisperStream": {
+      "type": "string",
+      "title": "whisper-stream.exe",
+      "description": "The path of whisper.cpp's whisper-stream.exe. Empty: found on PATH, else under %LOCALAPPDATA%\\voice-listen",
+      "default": ""
+    },
+    "whisperModel": {
+      "type": "string",
+      "title": "Whisper model",
+      "description": "The path of a ggml-*.bin model. Empty: the first under %LOCALAPPDATA%\\voice-listen\\models, large-v3-turbo first",
+      "default": ""
+    },
+    "voice": {
+      "type": "string",
+      "title": "Piper voice",
+      "description": "A piper-voice voice id. Empty: en_US-ljspeech-medium for en, fr_FR-siwis-medium for fr, or the service's default when PIPER_VOICE_VOICE sets one",
+      "default": ""
+    },
+    "callApp": {
+      "type": "string",
+      "title": "Other voice agent's app",
+      "description": "The process name of another voice agent whose call shares the microphone (by default the ChatGPT app): while its call's mic is open, what you say goes to it, and its voice is not taken for yours. Empty turns this off",
+      "default": "ChatGPT"
+    },
+    "sceneSayFile": {
+      "type": "string",
+      "title": "3D scene say file",
+      "description": "Off when empty (the default). A file a 3D scene reads: while its Godot window has the focus, Claude's replies are written there for its own voice instead of piper-voice",
+      "default": ""
     }
   }
 }
