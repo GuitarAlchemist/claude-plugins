@@ -77,3 +77,9 @@ plugin's name.
 
 What it does not see: a command answered by a hook with no matcher, and the
 commands of a plugin listed from another repo.
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). A plugin listed from another repo, such as `ga`,
+is under that repo's licence. Downloaded models keep their own licences, such
+as the Piper voices that `voice` installs.

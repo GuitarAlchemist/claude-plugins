@@ -81,3 +81,9 @@ préfixe du nom de leur plugin.
 
 Ce qu'il ne voit pas : une commande traitée par un hook sans matcher, et les
 commandes d'un plugin référencé depuis un autre repo.
+
+## Licence
+
+MIT, voir [LICENSE](LICENSE). Un plugin référencé depuis un autre repo, comme
+`ga`, relève de la licence de ce repo. Les modèles téléchargés gardent leurs
+propres licences, comme les voix Piper qu'installe `voice`.
