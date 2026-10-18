@@ -11,6 +11,7 @@ marketplace that versions them. Why it is laid out this way:
 | `fleet` | `/fleet:ai-scrum`: a round table of every session, subagent, claimed lane and open pull request, with what waits on the user | here |
 | `session-inbox` | an `/inbox` pane for messages from other sessions, and working groups | here |
 | `shared-repo-guard` | holds blanket git commands in shared clones; `/lanes`, and a `/prs` pane | here |
+| `ix` | IX's MCP server (`ix-mcp`) for Claude Code and Codex: its ML, math, graph and governance tools ([README](plugins/ix/README.md)) | here |
 | `ga` | Guitar Alchemist DSL tools; works only in a session started inside a ga checkout | [ga](https://github.com/GuitarAlchemist/ga/tree/main/plugins/ga) |
 
 ## Three places a plugin can live
@@ -28,6 +29,14 @@ marketplace that versions them. Why it is laid out this way:
 ```bash
 claude plugin marketplace add GuitarAlchemist/claude-plugins
 claude plugin install fleet@guitaralchemist
+```
+
+Codex reads the same marketplace. Of the plugins here, only `ix` is written
+for it:
+
+```bash
+codex plugin marketplace add GuitarAlchemist/claude-plugins
+codex plugin add ix@guitaralchemist
 ```
 
 A repo can declare it for everyone who opens it, in its committed
@@ -53,6 +62,8 @@ machine: the same plugin would load twice.
 
 Each plugin's version is written twice, in its `.claude-plugin/plugin.json` and
 in its entry in `.claude-plugin/marketplace.json`, and the two must agree. A
+plugin that also has a Codex manifest, `.codex-plugin/plugin.json`, writes it
+there a third time. A
 pull request that changes a plugin's files must raise its version
 ([semver](https://semver.org): a fix is a patch, a new command or tool a minor,
 a removed or renamed one a major). `claude plugin tag plugins/<name>` creates
@@ -67,7 +78,8 @@ python scripts/check.py --base origin/main     # what CI runs on a pull request
 python scripts/check.py --also ~/.claude/skills/ga-chatbot   # add mods kept elsewhere
 ```
 
-For every plugin listed, it checks the two versions agree,
+For every plugin listed, it checks the versions agree (the Codex manifest's
+too),
 `claude plugin validate` passes, `claude plugin test` passes where there are
 tests, and with `--base`, that a changed plugin raised its version. For a
 plugin listed from another repo it reads `plugin.json` at the pinned sha. Then

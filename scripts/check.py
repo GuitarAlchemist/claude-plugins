@@ -3,7 +3,8 @@
     python scripts/check.py [--base REF] [--also DIR ...]
 
 For each plugin in .claude-plugin/marketplace.json:
-  - one in this repo: its plugin.json has the entry's name and version, `claude plugin validate`
+  - one in this repo: its plugin.json, and its Codex manifest .codex-plugin/plugin.json when it
+    has one, have the entry's name and version, `claude plugin validate`
     passes, `claude plugin test` passes when it has tests, and, with --base, a plugin whose files
     changed since REF has a higher version than it had there;
   - one in another repo (git-subdir): its plugin.json at the pinned sha has the entry's name and
@@ -62,6 +63,13 @@ def check_local(entry, base):
         fail(f"{name}: plugin.json names {pj.get('name')!r}")
     if pj.get("version") != entry.get("version"):
         fail(f"{name}: version {pj.get('version')!r} in plugin.json, {entry.get('version')!r} in marketplace.json")
+    codex = os.path.join(path, ".codex-plugin", "plugin.json")
+    if os.path.isfile(codex):
+        with open(codex, encoding="utf-8") as f:
+            cj = json.load(f)
+        if (cj.get("name"), cj.get("version")) != (name, entry.get("version")):
+            fail(f"{name}: .codex-plugin/plugin.json has {cj.get('name')} {cj.get('version')}, "
+                 f"marketplace.json {name} {entry.get('version')}")
     code, out = run(["claude", "plugin", "validate", path])
     if code != 0:
         fail(f"{name}: claude plugin validate failed:\n{out}")
