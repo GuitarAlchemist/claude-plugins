@@ -1,0 +1,33 @@
+{
+  "name": "ix",
+  "version": "0.1.0",
+  "description": "IX's MCP server: its ML, math, graph, search and Demerzel governance tools. Needs Node.js and an ix-mcp binary, found from the ix_mcp_bin option, IX_MCP_BIN or PATH",
+  "author": { "name": "Stephane Pareilleux" },
+  "homepage": "https://github.com/GuitarAlchemist/ix",
+  "repository": "https://github.com/GuitarAlchemist/claude-plugins",
+  "keywords": ["mcp", "machine-learning", "math", "governance"],
+  "mcpServers": {
+    "ix": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/ix-mcp.mjs",
+        "--bin", "${user_config.ix_mcp_bin}",
+        "--root", "${user_config.ix_root}"
+      ]
+    }
+  },
+  "userConfig": {
+    "ix_mcp_bin": {
+      "type": "file",
+      "title": "ix-mcp binary",
+      "description": "Path to ix-mcp. Leave empty to use IX_MCP_BIN, then ix-mcp on PATH",
+      "default": ""
+    },
+    "ix_root": {
+      "type": "directory",
+      "title": "IX clone",
+      "description": "An ix clone with governance/demerzel checked out. Leave empty to use IX_ROOT, then the clone ix-mcp was built in",
+      "default": ""
+    }
+  }
+}

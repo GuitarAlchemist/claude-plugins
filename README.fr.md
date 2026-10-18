@@ -11,6 +11,7 @@ marketplace qui les versionne. Pourquoi cette organisation :
 | `fleet` | `/fleet:ai-scrum` : un tour de table de chaque session, sous-agent, lane réclamée et pull request ouverte, avec ce qui attend l'utilisateur | ici |
 | `session-inbox` | un panneau `/inbox` pour les messages des autres sessions, et des groupes de travail | ici |
 | `shared-repo-guard` | retient les commandes git globales dans les clones partagés ; `/lanes`, et un panneau `/prs` | ici |
+| `ix` | le serveur MCP d'IX (`ix-mcp`) pour Claude Code et Codex : ses outils de ML, de maths, de graphes et de gouvernance ([README](plugins/ix/README.fr.md)) | ici |
 | `ga` | les outils du DSL Guitar Alchemist ; ne fonctionne que dans une session démarrée dans un checkout de ga | [ga](https://github.com/GuitarAlchemist/ga/tree/main/plugins/ga) |
 
 ## Trois endroits où un plugin peut vivre
@@ -29,6 +30,14 @@ marketplace qui les versionne. Pourquoi cette organisation :
 ```bash
 claude plugin marketplace add GuitarAlchemist/claude-plugins
 claude plugin install fleet@guitaralchemist
+```
+
+Codex lit la même marketplace. Parmi les plugins d'ici, seul `ix` est écrit
+pour lui :
+
+```bash
+codex plugin marketplace add GuitarAlchemist/claude-plugins
+codex plugin add ix@guitaralchemist
 ```
 
 Un repo peut la déclarer pour tous ceux qui l'ouvrent, dans son
@@ -55,7 +64,9 @@ fois.
 
 La version de chaque plugin est écrite deux fois, dans son
 `.claude-plugin/plugin.json` et dans son entrée de
-`.claude-plugin/marketplace.json`, et les deux doivent concorder. Une pull
+`.claude-plugin/marketplace.json`, et les deux doivent concorder. Un plugin
+qui a aussi un manifeste Codex, `.codex-plugin/plugin.json`, l'y écrit une
+troisième fois. Une pull
 request qui modifie les fichiers d'un plugin doit augmenter sa version
 ([semver](https://semver.org/lang/fr/) : un correctif est un patch, une
 nouvelle commande ou un nouvel outil un minor, une commande retirée ou
@@ -71,7 +82,8 @@ python scripts/check.py --base origin/main     # ce que la CI exécute sur une p
 python scripts/check.py --also ~/.claude/skills/ga-chatbot   # ajouter des mods gardés ailleurs
 ```
 
-Pour chaque plugin listé, il vérifie que les deux versions concordent, que
+Pour chaque plugin listé, il vérifie que les versions concordent (celle du
+manifeste Codex aussi), que
 `claude plugin validate` passe, que `claude plugin test` passe là où il y a des
 tests et, avec `--base`, qu'un plugin modifié a augmenté sa version. Pour un
 plugin référencé depuis un autre repo, il lit `plugin.json` au sha épinglé.
