@@ -23,6 +23,8 @@ type Server struct {
 	Engine       string
 	SampleRate   int
 	MaxText      int
+	// RTC, when not nil, serves /rtc and /v1/rtc/offer: full-duplex sessions over WebRTC.
+	RTC *RTC
 }
 
 type sayRequest struct {
@@ -57,40 +59,36 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/stop", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]int{"stopped": s.Speaker.Stop()})
 	})
+	if s.RTC != nil {
+		mux.HandleFunc("GET /rtc", s.RTC.page)
+		mux.HandleFunc("POST /v1/rtc/offer", s.RTC.offer)
+	}
 	return localOnly(mux)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version, "engine": s.Engine,
-		"voice": s.DefaultVoice, "sample_rate": s.SampleRate})
+	h := map[string]any{"ok": true, "version": version, "engine": s.Engine,
+		"voice": s.DefaultVoice, "sample_rate": s.SampleRate, "rtc": s.RTC != nil}
+	if s.RTC != nil {
+		h["transcriber"] = s.RTC.transcriberName()
+	}
+	writeJSON(w, http.StatusOK, h)
 }
 
 // pick resolves a voice id (empty for the default) and a rate (nil for 1).
 func (s *Server) pick(id string, rate *float64) (Voice, float64, error) {
-	if id == "" {
-		id = s.DefaultVoice
-	}
-	v, ok := findVoice(s.Voices, id)
-	if !ok {
-		return Voice{}, 0, fmt.Errorf("no voice %q; installed: %s", id, voiceIDs(s.Voices))
-	}
-	r := 1.0
-	if rate != nil {
-		r = *rate
-	}
-	if !(r >= 0.5 && r <= 2) {
-		return Voice{}, 0, errors.New("rate must be between 0.5 and 2")
-	}
-	return v, r, nil
+	return pickVoice(s.Voices, s.DefaultVoice, id, rate)
 }
 
 // checkText answers the status and message that refuse text, or 0 when it is fine.
-func (s *Server) checkText(text string) (int, string) {
+func (s *Server) checkText(text string) (int, string) { return checkText(text, s.MaxText) }
+
+func checkText(text string, maxRunes int) (int, string) {
 	if strings.TrimSpace(text) == "" {
 		return http.StatusBadRequest, "text is empty"
 	}
-	if n := utf8.RuneCountInString(text); n > s.MaxText {
-		return http.StatusRequestEntityTooLarge, fmt.Sprintf("text has %d characters; the limit is %d", n, s.MaxText)
+	if n := utf8.RuneCountInString(text); n > maxRunes {
+		return http.StatusRequestEntityTooLarge, fmt.Sprintf("text has %d characters; the limit is %d", n, maxRunes)
 	}
 	return 0, ""
 }
@@ -315,10 +313,11 @@ func (s *Server) synthesize(w http.ResponseWriter, r *http.Request) {
 }
 
 // localOnly refuses requests a web page could make: any request with an Origin header, and any
-// whose Host is not a loopback name, which is what a DNS-rebinding page would send.
+// whose Host is not a loopback name, which is what a DNS-rebinding page would send. The one
+// exception is the page this service serves itself: its own origin may post to /v1/rtc/.
 func localOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Origin") != "" {
+		if o := r.Header.Get("Origin"); o != "" && !(o == "http://"+r.Host && strings.HasPrefix(r.URL.Path, "/v1/rtc/")) {
 			writeError(w, http.StatusForbidden, "requests from web pages are refused")
 			return
 		}
