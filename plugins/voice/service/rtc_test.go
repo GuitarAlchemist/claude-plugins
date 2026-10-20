@@ -292,12 +292,12 @@ func TestRTCOfferIsLoopbackAndOwnOriginOnly(t *testing.T) {
 		code       int
 		has        string
 	}{
-		"foreign origin": {"/v1/rtc/offer", `{"sdp":"v=0"}`, func(r *http.Request) { r.Header.Set("Origin", "https://example.com") }, 403, "web pages"},
+		"foreign origin":       {"/v1/rtc/offer", `{"sdp":"v=0"}`, func(r *http.Request) { r.Header.Set("Origin", "https://example.com") }, 403, "web pages"},
 		"own origin elsewhere": {"/v1/say", `{"text":"x"}`, func(r *http.Request) { r.Header.Set("Origin", ts.URL) }, 403, "web pages"},
-		"https own host": {"/v1/rtc/offer", `{"sdp":"v=0"}`, func(r *http.Request) { r.Header.Set("Origin", strings.Replace(ts.URL, "http://", "https://", 1)) }, 403, "web pages"},
-		"not an offer":   {"/v1/rtc/offer", `{"sdp":""}`, nil, 400, "not an offer"},
-		"unknown field":  {"/v1/rtc/offer", `{"sdp":"v=0","ice":[]}`, nil, 400, "ice"},
-		"bad sdp":        {"/v1/rtc/offer", `{"sdp":"v=0"}`, func(r *http.Request) { r.Header.Set("Origin", ts.URL) }, 400, "refused"},
+		"https own host":       {"/v1/rtc/offer", `{"sdp":"v=0"}`, func(r *http.Request) { r.Header.Set("Origin", strings.Replace(ts.URL, "http://", "https://", 1)) }, 403, "web pages"},
+		"not an offer":         {"/v1/rtc/offer", `{"sdp":""}`, nil, 400, "not an offer"},
+		"unknown field":        {"/v1/rtc/offer", `{"sdp":"v=0","ice":[]}`, nil, 400, "ice"},
+		"bad sdp":              {"/v1/rtc/offer", `{"sdp":"v=0"}`, func(r *http.Request) { r.Header.Set("Origin", ts.URL) }, 400, "refused"},
 	}
 	for name, c := range cases {
 		code, a := do(t, ts, "POST", c.path, c.body, c.edit)
