@@ -14,6 +14,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
 
 ACTIVE = {"claimed", "in-progress", "pr-open"}
@@ -172,6 +173,9 @@ def main():
     ap.add_argument("--repo", action="append", help=f"a repo outside the organisation (repeatable; default {EXTRA_REPOS})")
     ap.add_argument("--repos-root", default=os.path.join(os.path.expanduser("~"), "source", "repos"))
     a = ap.parse_args()
+    # A PR title can carry any character, and on Windows a piped stdout defaults
+    # to cp1252: one "♭" in a title crashed the whole snapshot.
+    sys.stdout.reconfigure(encoding="utf-8")
     extra = EXTRA_REPOS if a.repo is None else [r for r in a.repo if r]
     now = datetime.now(timezone.utc)
     cut = now - timedelta(hours=a.hours)
