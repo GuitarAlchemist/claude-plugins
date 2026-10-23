@@ -9,7 +9,9 @@ import { TEXT, errorText, fingerprint, lang, listenArgv, listenBand, listenState
 // tested in listen/Commands.Tests.ps1.
 
 test('a reply is said from its first prose paragraph, without markdown, links or paths', () => {
-  expect(speakable('# Title\n\nC\'est **fait** : voir [la PR](https://x.y/1) et `C:\\a\\b.txt`.\n\nSuite.')).toBe('C\'est fait : voir la PR et .')
+  expect(speakable('# Title\n\nC\'est **fait** : voir [la PR](https://x.y/1) et `C:\\a\\b.txt`.\n\nSuite.')).toBe('C\'est fait : voir la pull request et .')
+  // The French voice reads "PR" as "professeur" (Pr.); a word that only starts with PR stays.
+  expect(speakable('Les deux PRs et la PR #441 vont en PROD.')).toBe('Les deux pull requests et la pull request #441 vont en PROD.')
   expect(speakable('```\ncode\n```\n\n- un\n- deux')).toBe('un deux')
   expect(speakable('| a | b |\n\n> cité\n\nPiper parle.')).toBe('Paillepeur parle.') // the French voice's spelling
   expect(speakable('Piper speaks.', 'en')).toBe('Piper speaks.') // the English voice says it right

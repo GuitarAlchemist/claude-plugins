@@ -7,7 +7,11 @@ export const MAX_CHARS = 450
 export const PIPER_URL = 'http://127.0.0.1:59126'
 
 // Names the French voice misreads, spelt the way it should say them.
-const SAY_AS_FR: [RegExp, string][] = [[/\bPiper\b/g, 'Paillepeur']] // paɪpɚ, read as pajpœʁ
+const SAY_AS_FR: [RegExp, string][] = [
+  [/\bPiper\b/g, 'Paillepeur'], // paɪpɚ, read as pajpœʁ
+  [/\bPRs\b/g, 'pull requests'], // "PR" is read as "professeur" (Pr.)
+  [/\bPR\b/g, 'pull request'],
+]
 
 /** The reply's first prose paragraph, without markdown, links or paths, cut at a sentence. */
 export function speakable(md: string, language = 'fr'): string {
