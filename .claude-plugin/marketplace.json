@@ -29,6 +29,20 @@
       "category": "productivity"
     },
     {
+      "name": "voice",
+      "version": "0.3.0",
+      "description": "Full-duplex local voice: Claude speaks through piper-voice, a local streaming text-to-speech service on Piper (127.0.0.1 only), says its replies with /speak on, and hears you with /listen, transcribed on this machine by whisper.cpp (listening is Windows only and off until /listen)",
+      "source": "./plugins/voice",
+      "category": "productivity"
+    },
+    {
+      "name": "voice-avatar",
+      "version": "0.2.0",
+      "description": "An avatar band above the prompt and a detailed pane for the voice plugin: who speaks, whether Claude listens and to whom, the microphone's level, and what Claude is doing; it only reads the voice plugin's local state files",
+      "source": "./plugins/voice-avatar",
+      "category": "productivity"
+    },
+    {
       "name": "ga",
       "version": "1.0.0",
       "description": "Guitar Alchemist DSL: music theory tools, chord analysis, tab search and GA Language commands. It runs GaMcpServer from the current directory, so it works only in a session started inside a ga checkout",

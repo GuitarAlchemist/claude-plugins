@@ -11,6 +11,8 @@ marketplace that versions them. Why it is laid out this way:
 | `fleet` | `/fleet:ai-scrum`: a round table of every session, subagent, claimed lane and open pull request, with what waits on the user | here |
 | `session-inbox` | an `/inbox` pane for messages from other sessions, and working groups | here |
 | `shared-repo-guard` | holds blanket git commands in shared clones; `/lanes`, and a `/prs` pane | here |
+| `voice` | full-duplex local voice: `/voice` and `/speak` make Claude speak through piper-voice, a local streaming text-to-speech service on Piper (Go, loopback only); `/listen` hears you, transcribed on the machine by whisper.cpp (Windows, off until asked) | here |
+| `voice-avatar` | an avatar band above the prompt and a pane for `voice`: who speaks, whether Claude listens and to whom, the mic level, what Claude does | here |
 | `ga` | Guitar Alchemist DSL tools; works only in a session started inside a ga checkout | [ga](https://github.com/GuitarAlchemist/ga/tree/main/plugins/ga) |
 
 ## Three places a plugin can live
