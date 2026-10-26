@@ -47,6 +47,7 @@ func fakePiper() {
 		if in.Text == "hang" {
 			_ = os.WriteFile(in.OutputFile+".started", nil, 0o600)
 			_, _ = io.Copy(io.Discard, os.Stdin)
+			_ = os.WriteFile(in.OutputFile+".eof", nil, 0o600)
 			return
 		}
 		pcm := make([]byte, 200*len([]rune(in.Text)))
@@ -185,7 +186,16 @@ func TestPiperConcurrentCloseDoesNotWaitBehindBlockedSynthesis(t *testing.T) {
 	case <-closed:
 	case <-time.After(time.Second):
 		_ = p.cmd.Process.Kill()
-		t.Fatal("Close waited on synthesis gate")
+		markers, _ := filepath.Glob(filepath.Join(p.tmp, "*.eof"))
+		// Diagnostic control: same fake binary, only its runtime exit sleep differs.
+		t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
+		control, err := startFake(t, testVoice, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := time.Now()
+		_ = control.Close()
+		t.Fatalf("Close waited on synthesis gate: fake already reached EOF=%t; control child Close without race exit sleep=%s", len(markers) > 0, time.Since(before))
 	}
 	select {
 	case <-done:

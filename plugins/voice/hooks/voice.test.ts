@@ -165,7 +165,7 @@ test('a session that did not ask for voice stays silent', async ($, on) => {
 test('/speak on says each reply once, in the French voice, through the loopback service; /speak off stops it', async ($, on) => {
   const f = fakes(on, WIN, {})
   expect((await $.command.run(command('speak', 'on'))).text).toBe(TEXT.fr.speakOn)
-  expect(f.files['C:/LA/piper-voice/sessions/S1']).toBe('')
+  expect(f.files).toEqual({ 'C:/LA/piper-voice/sessions/S1': '' })
   await reply($, 'Bonjour.\n\nDétails.')
   expect(f.fetched).toEqual(['POST http://127.0.0.1:59126/v1/say {"text":"Bonjour.","voice":"fr_FR-siwis-medium"}'])
   await reply($, 'Bonjour.') // the same reply twice: said once
@@ -321,3 +321,4 @@ test('in English, that line is English', EN, async ($, on) => {
   })
   expect((await band.find({ type: 'Text', text: '/listen stop' }))?.text).toBe('🎙 listening: the mic is open, transcribed on this machine · /listen stop')
 })
+
