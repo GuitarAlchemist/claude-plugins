@@ -47,7 +47,6 @@ func fakePiper() {
 		if in.Text == "hang" {
 			_ = os.WriteFile(in.OutputFile+".started", nil, 0o600)
 			_, _ = io.Copy(io.Discard, os.Stdin)
-			_ = os.WriteFile(in.OutputFile+".eof", nil, 0o600)
 			return
 		}
 		pcm := make([]byte, 200*len([]rune(in.Text)))
@@ -186,16 +185,7 @@ func TestPiperConcurrentCloseDoesNotWaitBehindBlockedSynthesis(t *testing.T) {
 	case <-closed:
 	case <-time.After(time.Second):
 		_ = p.cmd.Process.Kill()
-		markers, _ := filepath.Glob(filepath.Join(p.tmp, "*.eof"))
-		// Diagnostic control: same fake binary, only its runtime exit sleep differs.
-		t.Setenv("GORACE", os.Getenv("GORACE")+" atexit_sleep_ms=0")
-		control, err := startFake(t, testVoice, 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		before := time.Now()
-		_ = control.Close()
-		t.Fatalf("Close waited on synthesis gate: fake already reached EOF=%t; control child Close without race exit sleep=%s", len(markers) > 0, time.Since(before))
+		t.Fatal("Close waited on synthesis gate")
 	}
 	select {
 	case <-done:
@@ -209,7 +199,12 @@ func TestPiperConcurrentCloseDoesNotWaitBehindBlockedSynthesis(t *testing.T) {
 
 func startFake(t *testing.T, v Voice, lengthScale float64) (Engine, error) {
 	t.Helper()
-	return startPiper(os.Args[0], append(os.Environ(), "FAKE_PIPER=1"), v, lengthScale, t.TempDir(), log.New(io.Discard, "", 0))
+	// The fake is this Go test binary. Under -race its default exit sleep is
+	// 1000 ms, unlike native Piper. Remove only that artificial child delay;
+	// race instrumentation/reporting and the parent's settings stay enabled.
+	// https://go.dev/doc/articles/race_detector#Options
+	env := append(os.Environ(), "FAKE_PIPER=1", "GORACE="+os.Getenv("GORACE")+" atexit_sleep_ms=0")
+	return startPiper(os.Args[0], env, v, lengthScale, t.TempDir(), log.New(io.Discard, "", 0))
 }
 
 func TestPiperCLIFramesEachSentence(t *testing.T) {
