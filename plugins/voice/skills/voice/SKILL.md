@@ -36,7 +36,9 @@ below. Then fall back to the commands.
 
 ## Commands
 
-The binary is `%LOCALAPPDATA%\piper-voice\bin\piper-voice.exe` once it is built.
+In a Windows release archive the binary is `bin/piper-voice.exe` relative to
+this plugin's root. Its MCP entry uses that same bundled binary. A source
+checkout must be built before use; a missing binary is not a running service.
 Below, `piper-voice` means that path.
 
 | Want | Run |
@@ -53,18 +55,24 @@ it as a chunked body to `POST /v1/say/stream`. The contract is in this plugin's
 
 ## First use on a machine
 
-1. Build the service, which needs Go 1.25 or later:
-   `go build -o "$env:LOCALAPPDATA\piper-voice\bin\piper-voice.exe" .`, run in the
-   plugin's `service/` folder.
-2. `piper-voice setup` downloads about 85 MB: the Piper engine (release
-   2023.11.14-2) and the French voice. Every file is checked against a pinned
-   SHA-256. `--english` adds the English voice.
-3. Start the service in the background:
-   `Start-Process -WindowStyle Hidden "$env:LOCALAPPDATA\piper-voice\bin\piper-voice.exe" serve`.
+Use the verified bundled binary. Developers can build it with Go 1.25 or
+later from `service/`: `go build -o ../bin/piper-voice.exe .`.
 
-When `status` says it is not running and the user asked for voice, start it
-(step 3). If setup has not been run, tell the user and ask before downloading.
+`piper-voice setup` only prints a plan, without network or writes. It names
+the pinned sources, versions, sizes and licenses. French Piper downloads total
+85,683,405 bytes; `--english` adds 63,536,351 bytes. Explain that plan and obtain
+the user's approval before running `setup --apply` with the same options.
+It does not set up whisper.cpp or start the service.
+
+Once dependencies are installed and the user requested speech, start the
+bundled executable with `Start-Process -WindowStyle Hidden <binary> serve`.
+
+Completion means the service reports ready and the requested text/stop action
+has a successful receipt. A stop timeout is unacknowledged and requires a
+service restart; do not say output has been purged. Do not infer working
+full-duplex audio or echo cancellation from a loaded plugin or health check.
 
 To start the service at every logon (no administrator rights needed), see
 "Starting at logon" in the README: `piper-voice install`, and `uninstall` to
 undo it. That changes the user's logon, so run it only when they ask for it.
+

@@ -1,13 +1,14 @@
 {
   "name": "voice",
+  "license": "MIT",
   "version": "0.3.0",
-  "description": "Full-duplex local voice: Claude speaks through piper-voice, a local streaming text-to-speech service on Piper (127.0.0.1 only), says its replies with /speak on, and hears you with /listen, transcribed on this machine by whisper.cpp (listening is Windows only and off until /listen)",
+  "description": "Windows local voice: Piper sentence-streamed speech on loopback, /speak replies and opt-in /listen through whisper.cpp. Acoustic full duplex, echo cancellation and bidirectional WebRTC are not yet verified.",
   "author": { "name": "Stephane Pareilleux" },
   "types": "./types/index.d.ts",
   "mcpServers": {
     "voice": {
       "type": "stdio",
-      "command": "${LOCALAPPDATA}/piper-voice/bin/piper-voice.exe",
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/piper-voice.exe",
       "args": ["mcp"]
     }
   },
@@ -56,3 +57,4 @@
     }
   }
 }
+

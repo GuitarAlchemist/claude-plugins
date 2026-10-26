@@ -4,11 +4,16 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // TestMain doubles as a fake piper: started with FAKE_PIPER=1, the test binary reads JSON lines,
@@ -39,11 +44,156 @@ func fakePiper() {
 		if err := json.Unmarshal(sc.Bytes(), &in); err != nil || in.Text == "die" {
 			os.Exit(3)
 		}
+		if in.Text == "hang" {
+			_ = os.WriteFile(in.OutputFile+".started", nil, 0o600)
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			return
+		}
 		pcm := make([]byte, 200*len([]rune(in.Text)))
 		if err := os.WriteFile(in.OutputFile, append(wavHeader(testRate, len(pcm)), pcm...), 0o644); err != nil {
 			os.Exit(4)
 		}
 		fmt.Println(in.OutputFile)
+	}
+}
+
+func TestPiperCancellationReleasesTheExistingProcess(t *testing.T) {
+	e, err := startFake(t, testVoice, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	p := e.(*piperCLI)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := e.Synthesize(ctx, "hang"); done <- err }()
+	deadline := time.After(time.Second)
+	for {
+		markers, _ := filepath.Glob(filepath.Join(p.tmp, "*.started"))
+		if len(markers) != 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("fake request did not start")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("got %v", err)
+		}
+	case <-time.After(time.Second):
+		// Only a fake child is involved. Release it even on the red baseline.
+		_ = p.cmd.Process.Kill()
+		t.Fatal("Piper ignored cancellation")
+	}
+	if e.Alive() {
+		t.Fatal("cancelled process remained reusable")
+	}
+}
+
+func TestPiperRejectsInvalidRateBeforeStartingAProcess(t *testing.T) {
+	for _, rate := range []int{-1, 0, 48001, 1000000000} {
+		v := testVoice
+		v.SampleRate = rate
+		_, err := startPiper("must-not-be-executed", nil, v, 1, t.TempDir(), log.New(io.Discard, "", 0))
+		if err == nil || !strings.Contains(err.Error(), "1 to 48000") {
+			t.Fatalf("rate %d: %v", rate, err)
+		}
+	}
+}
+
+func TestPiperWaitingRequestCanCancelWithoutKillingAnotherRequest(t *testing.T) {
+	e, err := startFake(t, testVoice, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := e.(*piperCLI)
+	defer e.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { _, err := e.Synthesize(ctx, "hang"); done <- err }()
+	deadline := time.After(time.Second)
+	for {
+		markers, _ := filepath.Glob(filepath.Join(p.tmp, "*.started"))
+		if len(markers) != 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("fake request did not start")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer waitCancel()
+	waited := make(chan error, 1)
+	go func() { _, err := e.Synthesize(waitCtx, "not admitted"); waited <- err }()
+	select {
+	case err := <-waited:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("queued request ignored its deadline")
+	}
+	if !e.Alive() {
+		t.Fatal("queued cancellation killed another request")
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("active request did not stop")
+	}
+}
+
+func TestPiperConcurrentCloseDoesNotWaitBehindBlockedSynthesis(t *testing.T) {
+	e, err := startFake(t, testVoice, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := e.(*piperCLI)
+	defer e.Close()
+	done := make(chan error, 1)
+	go func() { _, err := e.Synthesize(context.Background(), "hang"); done <- err }()
+	deadline := time.After(time.Second)
+	for {
+		markers, _ := filepath.Glob(filepath.Join(p.tmp, "*.started"))
+		if len(markers) > 0 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("fake request did not start")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = e.Close() }()
+	}
+	closed := make(chan struct{})
+	go func() { wg.Wait(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(time.Second):
+		_ = p.cmd.Process.Kill()
+		t.Fatal("Close waited on synthesis gate")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("blocked synthesis did not return")
+	}
+	if e.Alive() {
+		t.Fatal("closed engine reported alive")
 	}
 }
 

@@ -2,13 +2,13 @@
 
 Lets Claude, and anything else on this machine, speak aloud through
 **piper-voice**: a local, streaming text-to-speech service on
-[Piper](https://github.com/rhasspy/piper). It costs nothing to run, and no text
-leaves the machine.
+[Piper](https://github.com/rhasspy/piper). Piper synthesis runs locally.
+Text addressed to Claude is processed by the provider configured in Claude Code.
 
 - **Streaming.** Text is cut into sentences. Each sentence plays while the next
-  one is being synthesized. On the author's machine the first sound comes about
-  0.8 s after the request, and that includes loading the voice. Piper
-  synthesizes about ten times faster than real time.
+  one is being synthesized. These are whole-sentence WAVs, not incremental
+  PCM generation inside a sentence. Live latency has not been measured for
+  this prepared Windows release.
 - **Barge-in.** `stop` cuts the current sentence and empties the queue.
 - **Loopback only.** It listens on 127.0.0.1:59126 and refuses requests that
   carry an `Origin` header or a non-loopback `Host`, so a web page cannot make
@@ -21,17 +21,19 @@ below.
 
 [Français](README.fr.md)
 
-```text
-/plugin install voice --marketplace GuitarAlchemist/claude-plugins
-```
+This revision is preparation, not an installable public release. For local
+evaluation after building, load only `claude --plugin-dir ./plugins/voice`.
+The flag loads one session. A versioned voice-only release archive and the
+existing `guitaralchemist` catalog are the intended distribution routes.
 
-## Full duplex: /speak and /listen
+## Speaking and listening
 
-Everything stays on the machine. The voice is Piper, reached on 127.0.0.1 only
+The voice is Piper, reached on 127.0.0.1 only
 (a `PIPER_VOICE_URL` that is not loopback is ignored). Speech-to-text is
-whisper.cpp, run locally. No audio and no text is sent anywhere by this plugin:
-the only thing that leaves the listener is the text of a sentence addressed to
-Claude, handed to this Claude Code session as if you had typed it.
+whisper.cpp, run locally. The listener hands recognized text to this Claude Code
+session as if you had typed it; Claude Code can send that text to its provider.
+The existing listener suppresses transcripts while Piper speaks. Bidirectional
+WebRTC voice, acoustic full duplex and echo cancellation are not verified here.
 
 | Command | What it does |
 | --- | --- |
@@ -102,7 +104,8 @@ Set `language` to `en` (with `/config`, or `"language": "en"` under
 - **What Piper says back is English:** "Listening." when the listener starts,
   "Yes?" when you call Claude, "Pausing.", "I've stopped listening."
 - **The voice is `en_US-ljspeech-medium`,** unless you set `voice` or the
-  service's `PIPER_VOICE_VOICE`. `piper-voice setup --english` installs it. If
+  service's `PIPER_VOICE_VOICE`. `piper-voice setup --english` plans it;
+  `--apply` explicitly installs that plan. If
   the service does not have the voice, the reply is said in its default voice.
 - **whisper listens for English.**
 
@@ -198,15 +201,19 @@ Errors are `{"error": "<what is wrong>"}`:
 
 ```powershell
 cd plugins/voice/service
-go build -o "$env:LOCALAPPDATA\piper-voice\bin\piper-voice.exe" .
-& "$env:LOCALAPPDATA\piper-voice\bin\piper-voice.exe" setup            # add --english for en_US
-Start-Process -WindowStyle Hidden "$env:LOCALAPPDATA\piper-voice\bin\piper-voice.exe" serve
+$voiceExe = Join-Path (Resolve-Path '..') 'bin\piper-voice.exe'
+go build -o $voiceExe .
+& $voiceExe setup            # offline plan; --english adds EN
+# After reviewing sources, sizes and licenses: & $voiceExe setup --apply
+Start-Process -WindowStyle Hidden $voiceExe serve
 ```
 
 The data folder is `%LOCALAPPDATA%\piper-voice\`, or `PIPER_VOICE_HOME` when it is set:
 
-- `engine/` holds Piper;
-- `voices/` holds the voices;
+- `active.json` names the verified bundle under `versions/<manifest>/`;
+- that bundle contains `engine/` and `voices/`;
+- `downloads/` contains hash-checked artifacts and identity-bound partials;
+- the legacy `engine/` and `voices/` layout remains readable when no active pointer exists;
 - `tmp/` holds one WAV file per sentence, deleted once it has been read.
 
 Three environment variables change the defaults: `PIPER_VOICE_ADDR` (the address),
@@ -283,12 +290,12 @@ written, and that line marks where the sentence ends. Playback goes through
 
 | Part | Licence |
 | --- | --- |
-| this plugin | as this repository |
+| this plugin's original code | [MIT](LICENSE), Copyright (c) 2026 Stephane Pareilleux; dependencies retain their licenses |
 | Piper 2023.11.14-2 ([rhasspy/piper](https://github.com/rhasspy/piper), archived) | MIT; it links espeak-ng, which is GPL-3.0 |
 | `fr_FR-siwis-medium` | trained on the [SIWIS French Speech Synthesis Database](https://datashare.is.ed.ac.uk/handle/10283/2353), CC-BY 4.0 |
 | `en_US-ljspeech-medium` | trained on [LJ Speech](https://keithito.com/LJ-Speech-Dataset/), public domain |
 
-Neither Piper nor any voice is vendored: `setup` downloads them onto the
+Neither Piper nor any voice is vendored: `setup --apply` downloads them onto the
 machine, and the service talks to Piper over a pipe. The active fork of Piper,
 [OHF-Voice/piper1-gpl](https://github.com/OHF-Voice/piper1-gpl), is GPL-3.0. It
 is a candidate engine for a later slice, behind the same `Engine` interface.
@@ -303,3 +310,4 @@ go test -tags nooto ./...  # without the audio library, as on a machine without 
 
 The module in `hooks/` is tested with fakes, without a microphone, PowerShell
 or piper-voice: `claude plugin test plugins/voice`.
+

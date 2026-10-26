@@ -1,5 +1,6 @@
 {
   "name": "voice-avatar",
+  "license": "MIT",
   "version": "0.2.0",
   "description": "An avatar band above the prompt and a detailed pane for the voice plugin: who speaks (Piper, another voice agent, a 3D scene), whether Claude listens and to whom, the microphone's level, and what Claude is doing. It only reads the voice plugin's local state files",
   "author": { "name": "Stephane Pareilleux" },
@@ -25,3 +26,4 @@
     }
   }
 }
+
