@@ -94,6 +94,20 @@ test('every message has its English and its French', () => {
   for (const k of keys(TEXT.en)) expect(String((TEXT.en as Record<string, unknown>)[k])).not.toBe(String((TEXT.fr as Record<string, unknown>)[k]))
 })
 
+// The kit resolves fs paths on its host before passing them to stubs. Linux
+// therefore prefixes our simulated Windows paths with the plugin directory.
+function fixturePath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^.*\/(?=(?:C:\/LA|D:\/scene)\/)/, '')
+}
+
+test('the fake Windows disk recognizes paths resolved by either test host', () => {
+  expect(fixturePath('C:\\LA\\piper-voice\\sessions\\S1')).toBe('C:/LA/piper-voice/sessions/S1')
+  expect(fixturePath('/work/plugin/C:/LA/piper-voice/sessions/S1')).toBe('C:/LA/piper-voice/sessions/S1')
+  expect(fixturePath('/work/plugin/D:/scene/say.part')).toBe('D:/scene/say.part')
+  expect(fixturePath('/work/plugin/other/file.txt')).toBe('/work/plugin/other/file.txt')
+  expect(fixturePath('/work/plugin/C:/elsewhere/file.txt')).toBe('/work/plugin/C:/elsewhere/file.txt')
+})
+
 /** An in-memory disk and environment, a recorded HTTP and process log: nothing real is touched. */
 function fakes(on: On, env: Record<string, string>, files: Record<string, string>, opts: { voiceMissing?: boolean } = {}) {
   const fetched: string[] = []
@@ -102,7 +116,7 @@ function fakes(on: On, env: Record<string, string>, files: Record<string, string
   const filled: string[] = []
   const submitted: string[] = []
   const missing = { deny: 'ENOENT' } as never
-  const k = (path: string) => path.replace(/\\/g, '/') // the engine hands hooks the native path
+  const k = fixturePath
   on('env.get', async (_, e) => ({ value: env[e.name] }))
   on('fs.exists', async (_, e) => ({ value: k(e.path) in files }))
   on('fs.read', async (_, e) => (k(e.path) in files ? { value: files[k(e.path)]! } : missing))
@@ -165,7 +179,7 @@ test('a session that did not ask for voice stays silent', async ($, on) => {
 test('/speak on says each reply once, in the French voice, through the loopback service; /speak off stops it', async ($, on) => {
   const f = fakes(on, WIN, {})
   expect((await $.command.run(command('speak', 'on'))).text).toBe(TEXT.fr.speakOn)
-  expect(f.files['C:/LA/piper-voice/sessions/S1']).toBe('')
+  expect(f.files).toEqual({ 'C:/LA/piper-voice/sessions/S1': '' })
   await reply($, 'Bonjour.\n\nDétails.')
   expect(f.fetched).toEqual(['POST http://127.0.0.1:59126/v1/say {"text":"Bonjour.","voice":"fr_FR-siwis-medium"}'])
   await reply($, 'Bonjour.') // the same reply twice: said once
@@ -321,3 +335,4 @@ test('in English, that line is English', EN, async ($, on) => {
   })
   expect((await band.find({ type: 'Text', text: '/listen stop' }))?.text).toBe('🎙 listening: the mic is open, transcribed on this machine · /listen stop')
 })
+

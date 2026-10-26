@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 // Player plays 16-bit mono PCM at SampleRate on the local output device.
@@ -31,6 +32,11 @@ type Utterance struct {
 	sentences atomic.Int64
 	playedMs  atomic.Int64
 	stopped   atomic.Bool
+	inputMu   sync.Mutex
+	changed   chan struct{}
+	ended     bool
+	runes     int
+	doneOnce  sync.Once
 
 	errMu sync.Mutex
 	err   error
@@ -38,20 +44,84 @@ type Utterance struct {
 
 // Add queues one sentence. It returns false once the utterance has been stopped.
 func (u *Utterance) Add(sentence string) bool {
-	select {
-	case u.in <- sentence:
-		u.sentences.Add(1)
-		return true
-	case <-u.ctx.Done():
+	return u.AddContext(context.Background(), sentence)
+}
+
+// AddContext atomically accepts one sentence or refuses it. Cancellation of a
+// blocked admission does not cancel sentences already accepted by this turn.
+func (u *Utterance) AddContext(ctx context.Context, sentence string) bool {
+	if !utf8.ValidString(sentence) {
 		return false
+	}
+	n := utf8.RuneCountInString(sentence)
+	for {
+		u.inputMu.Lock()
+		if u.ended || u.ctx.Err() != nil || ctx.Err() != nil || u.runes+n > 20000 {
+			u.inputMu.Unlock()
+			return false
+		}
+		select {
+		case u.in <- sentence:
+			u.runes += n
+			u.sentences.Add(1)
+			u.signalInput()
+			u.inputMu.Unlock()
+			return true
+		default:
+		}
+		changed := u.changed
+		u.inputMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-u.ctx.Done():
+			return false
+		case <-changed:
+		}
+	}
+}
+func (u *Utterance) signalInput() { close(u.changed); u.changed = make(chan struct{}) }
+func (u *Utterance) next() (string, bool) {
+	for {
+		u.inputMu.Lock()
+		if u.ctx.Err() != nil {
+			u.inputMu.Unlock()
+			return "", false
+		}
+		select {
+		case text := <-u.in:
+			u.signalInput()
+			u.inputMu.Unlock()
+			return text, true
+		default:
+		}
+		if u.ended {
+			u.inputMu.Unlock()
+			return "", false
+		}
+		changed := u.changed
+		u.inputMu.Unlock()
+		select {
+		case <-u.ctx.Done():
+			return "", false
+		case <-changed:
+		}
 	}
 }
 
 // End says no sentence will follow.
-func (u *Utterance) End() { close(u.in) }
+func (u *Utterance) End() {
+	u.inputMu.Lock()
+	defer u.inputMu.Unlock()
+	if !u.ended {
+		u.ended = true
+		u.signalInput()
+	}
+}
 
 // Stop cuts this utterance alone, whether it is playing or still queued.
-func (u *Utterance) Stop() { u.cancel() }
+func (u *Utterance) Stop()     { u.inputMu.Lock(); defer u.inputMu.Unlock(); u.cancel(); u.signalInput() }
+func (u *Utterance) complete() { u.doneOnce.Do(func() { close(u.done) }) }
 
 // Done is closed once the utterance has been played, stopped, or has failed.
 func (u *Utterance) Done() <-chan struct{} { return u.done }
@@ -87,9 +157,12 @@ type Speaker struct {
 	seq     atomic.Uint64
 	current atomic.Pointer[Utterance]
 
-	mu      sync.Mutex
-	gen     context.Context
-	stopGen context.CancelFunc
+	mu          sync.Mutex
+	gen         context.Context
+	stopGen     context.CancelFunc
+	generation  uint64
+	unavailable error
+	stopping    int
 }
 
 // fx, when not nil, makes the effect each utterance is played through.
@@ -104,10 +177,25 @@ func NewSpeaker(engines func(v Voice, rate float64) (Engine, error), player Play
 // reads them.
 func (s *Speaker) Begin(v Voice, rate float64, room int) (*Utterance, error) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.unavailable != nil {
+		return nil, s.unavailable
+	}
+	if s.stopping > 0 {
+		return nil, errors.New("voice stop is still awaiting acknowledgement")
+	}
+	if room < 0 || room > 64 {
+		return nil, errors.New("sentence queue must contain 0 to 64 entries")
+	}
+	if room == 0 {
+		room = 1
+	} // existing streaming callers use zero; one bounded slot avoids rendezvous races
+	if v.SampleRate < 1 || v.SampleRate > 48000 {
+		return nil, errors.New("voice rate must be 1 to 48000 Hz")
+	}
 	ctx, cancel := context.WithCancel(s.gen)
-	s.mu.Unlock()
 	u := &Utterance{ID: fmt.Sprintf("u%d", s.seq.Add(1)), Voice: v, Rate: rate,
-		in: make(chan string, room), ctx: ctx, cancel: cancel, done: make(chan struct{})}
+		in: make(chan string, room), ctx: ctx, cancel: cancel, done: make(chan struct{}), changed: make(chan struct{})}
 	select {
 	case s.queue <- u:
 		return u, nil
@@ -120,24 +208,90 @@ func (s *Speaker) Begin(v Voice, rate float64, room int) (*Utterance, error) {
 // Stop cuts what is playing and drops what is queued. It returns how many utterances it cut.
 func (s *Speaker) Stop() int {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, _ := s.stopLocked()
+	return r.Stopped
+}
+
+type StopResult struct {
+	Stopped      int    `json:"stopped"`
+	Acknowledged bool   `json:"acknowledged"`
+	Generation   uint64 `json:"generation"`
+	Error        string `json:"error,omitempty"`
+}
+
+func (s *Speaker) stopLocked() (StopResult, *Utterance) {
+	current := s.current.Load()
 	s.stopGen()
 	s.gen, s.stopGen = context.WithCancel(context.Background())
-	s.mu.Unlock()
-	n := len(s.queue)
-	if s.current.Load() != nil {
-		n++
+	s.generation++
+	r := StopResult{Generation: s.generation}
+	if current != nil {
+		r.Stopped++
+		current.Stop()
 	}
-	return n
+	for {
+		select {
+		case u := <-s.queue:
+			u.Stop()
+			u.stopped.Store(true)
+			u.complete()
+			r.Stopped++
+		default:
+			return r, current
+		}
+	}
+}
+
+// StopAndWait acknowledges only service-side purge: the old player and provider
+// must have returned. Already played hardware samples cannot be recalled.
+func (s *Speaker) StopAndWait(ctx context.Context) (StopResult, error) {
+	s.mu.Lock()
+	s.stopping++
+	r, current := s.stopLocked()
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); s.stopping--; s.mu.Unlock() }()
+	ctx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+	defer cancel()
+	if current != nil {
+		select {
+		case <-current.Done():
+		case <-ctx.Done():
+			s.mu.Lock()
+			s.unavailable = errors.New("voice stop was not acknowledged; restart the service")
+			r.Error = s.unavailable.Error()
+			s.mu.Unlock()
+			return r, ctx.Err()
+		}
+	}
+	r.Acknowledged = true
+	return r, nil
+}
+
+func (s *Speaker) readinessError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.unavailable
 }
 
 func (s *Speaker) run() {
 	for u := range s.queue {
+		s.mu.Lock()
+		if u.ctx.Err() != nil {
+			s.mu.Unlock()
+			u.stopped.Store(true)
+			u.complete()
+			continue
+		}
 		s.current.Store(u)
+		s.mu.Unlock()
 		s.speak(u)
+		s.mu.Lock()
 		s.current.Store(nil)
+		s.mu.Unlock()
 		u.stopped.Store(u.ctx.Err() != nil && u.Err() == nil)
 		u.cancel()
-		close(u.done)
+		u.complete()
 	}
 }
 
@@ -163,13 +317,7 @@ func (s *Speaker) speak(u *Utterance) {
 			fx = s.fx()
 		}
 		for i := 1; ; i++ {
-			var text string
-			var ok bool
-			select {
-			case <-u.ctx.Done():
-				return
-			case text, ok = <-u.in:
-			}
+			text, ok := u.next()
 			if !ok {
 				if fx != nil {
 					select {
@@ -184,6 +332,10 @@ func (s *Speaker) speak(u *Utterance) {
 			if err != nil {
 				u.fail(err)
 				s.log.Printf("%s: sentence %d: %v", u.ID, i, err)
+				return
+			}
+			if len(pcm) > eng.SampleRate()*2*30 {
+				u.fail(errors.New("sentence exceeds 30 seconds of PCM"))
 				return
 			}
 			s.log.Printf("%s: sentence %d synthesized in %d ms (%d ms of audio)", u.ID, i, time.Since(t).Milliseconds(), audioMs(pcm, eng.SampleRate()))

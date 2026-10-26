@@ -8,19 +8,27 @@ service local de synthèse vocale en streaming sur
 qui transcrit sur la machine.
 
 ```text
-/plugin install voice --marketplace GuitarAlchemist/claude-plugins
+claude --plugin-dir ./plugins/voice
 ```
+
+Cette révision est en préparation, pas encore une release publique installable.
+Le chargement ci-dessus vise seulement cette session et nécessite le binaire
+compilé dans `bin/piper-voice.exe`. Le setup affiche un plan sans réseau ;
+`setup --apply` télécharge explicitement après lecture des tailles et licences.
+La chaîne WebRTC bidirectionnelle et le full duplex acoustique restent à valider.
+Le code original de ce plugin est sous [licence MIT](LICENSE) ; chaque dépendance
+conserve sa licence.
 
 Le contrat HTTP du service, sa compilation, son démarrage à l'ouverture de
 session et ses licences sont décrits dans le [README anglais](README.md).
 
-## Tout reste en local
+## Transcription et synthèse locales
 
 La voix est Piper, joint sur 127.0.0.1 seulement : un `PIPER_VOICE_URL` qui
 n'est pas en boucle locale est ignoré. La transcription est whisper.cpp,
-exécuté sur la machine. Ce plugin n'envoie ni son ni texte nulle part. Seul le
-texte d'une phrase adressée à Claude sort de l'écoute, et il est remis à cette
-session Claude Code comme si vous l'aviez tapé.
+exécuté sur la machine. Le texte reconnu est remis à cette session Claude Code
+comme si vous l'aviez tapé ; Claude Code peut l'envoyer à son fournisseur.
+L'écoute existante écarte les transcriptions pendant que Piper parle.
 
 | Commande | Ce qu'elle fait |
 | --- | --- |
@@ -167,3 +175,4 @@ ces fichiers.
 `claude plugin test plugins/voice` teste le module avec des faux, sans micro,
 sans PowerShell et sans piper-voice. Les tests du service Go sont décrits dans
 le README anglais.
+

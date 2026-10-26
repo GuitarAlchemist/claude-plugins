@@ -1,7 +1,7 @@
 // Command piper-voice is a local text-to-speech service: it speaks text aloud, sentence by
 // sentence, with Piper voices kept warm. It listens on 127.0.0.1 only.
 //
-//	piper-voice setup [--english]   download the Piper engine and voices (pinned SHA-256)
+//	piper-voice setup [--english] [--apply]   plan, or explicitly download the pinned dependencies
 //	piper-voice serve [--addr A] [--voice V] [--fx none|warm] [--log FILE]
 //	piper-voice say [--voice V] [--rate R] [--wait] <text>
 //	piper-voice stop | status | voices
@@ -28,9 +28,10 @@ import (
 )
 
 const (
-	version     = "0.1.0"
-	defaultAddr = "127.0.0.1:59126"
-	defaultVoc  = "fr_FR-siwis-medium"
+	version        = "0.1.1"
+	productVersion = "voice-0.3.1"
+	defaultAddr    = "127.0.0.1:59126"
+	defaultVoc     = "fr_FR-siwis-medium"
 )
 
 func main() {
@@ -65,7 +66,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: piper-voice setup [--english] | serve [--addr A] [--voice V] [--fx none|warm] [--log FILE] | say [--voice V] [--rate R] [--wait] <text> | stop | status | voices | mcp | install [--print] | uninstall")
+	fmt.Fprintln(os.Stderr, "usage: piper-voice setup [--english] [--apply] | serve [--addr A] [--voice V] [--fx none|warm] [--log FILE] | say [--voice V] [--rate R] [--wait] <text> | stop | status | voices | mcp | install [--print] | uninstall")
 	os.Exit(2)
 }
 
@@ -90,22 +91,31 @@ func home() (string, error) {
 }
 
 func setupCmd(args []string) error {
-	fs := flag.NewFlagSet("setup", flag.ExitOnError)
+	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	english := fs.Bool("english", false, "also install the English voice en_US-ljspeech-medium")
-	_ = fs.Parse(args)
+	apply := fs.Bool("apply", false, "explicitly download/install the plan; never starts the voice service")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("setup accepts only --english and --apply")
+	}
 	if runtime.GOOS != "windows" || runtime.GOARCH != "amd64" {
 		return errors.New("setup pins the Windows amd64 Piper release only; install piper yourself under <home>/engine/piper")
-	}
-	h, err := home()
-	if err != nil {
-		return err
 	}
 	pins := append([]pin{enginePin}, frenchPins...)
 	if *english {
 		pins = append(pins, englishPins...)
 	}
-	client := &http.Client{Timeout: 10 * time.Minute}
-	return install(h, pins, client, func(s string) { fmt.Println(s) })
+	if !*apply {
+		return printSetupPlan(os.Stdout, pins)
+	}
+	h, err := home()
+	if err != nil {
+		return err
+	}
+	client := newSetupClient()
+	return installBundle(h, pins, client, func(s string) { fmt.Println(s) }, nil)
 }
 
 func serveCmd(args []string) (err error) {
@@ -140,7 +150,11 @@ func serveCmd(args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	voices, err := scanVoices(filepath.Join(h, "voices"))
+	runtimeHome, err := setupRuntimeHome(h)
+	if err != nil {
+		return err
+	}
+	voices, err := scanVoices(filepath.Join(runtimeHome, "voices"))
 	if err != nil {
 		return err
 	}
@@ -148,7 +162,7 @@ func serveCmd(args []string) (err error) {
 	if !ok {
 		return fmt.Errorf("no voice %q in %s (run piper-voice setup); installed: %s", *voice, filepath.Join(h, "voices"), voiceIDs(voices))
 	}
-	exe := filepath.Join(h, "engine", "piper", "piper")
+	exe := filepath.Join(runtimeHome, "engine", "piper", "piper")
 	if runtime.GOOS == "windows" {
 		exe += ".exe"
 	}

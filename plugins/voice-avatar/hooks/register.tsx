@@ -656,32 +656,32 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         <Box>
-          <Text color={color} weight="bold">{` ${eyes} `}</Text>
-          <Text weight="bold"> Claude</Text>
-          {ask ? <Text backgroundColor={ask.ground} color={ask.color} weight="bold"> ? </Text> : null}
-          {work ? <Text color={SPIN_COLORS[(v?.spin ?? 0) % SPIN_COLORS.length]} weight="bold"> {SPIN[v?.spin ?? 0]}</Text> : null}
-          {gaia ? <Text color={GAIA_COLOR} weight="bold"> {gaia}</Text> : null}
+          <Text color={color} bold>{` ${eyes} `}</Text>
+          <Text bold> Claude</Text>
+          {ask ? <Text backgroundColor={ask.ground} color={ask.color} bold> ? </Text> : null}
+          {work ? <Text color={SPIN_COLORS[(v?.spin ?? 0) % SPIN_COLORS.length]} bold> {SPIN[v?.spin ?? 0]}</Text> : null}
+          {gaia ? <Text color={GAIA_COLOR} bold> {gaia}</Text> : null}
           <Text dimColor> · {parts.length ? parts.join(' · ') : gaia ? '' : w.rest}</Text>
         </Box>
         <Box>
-          <Text color={color} weight="bold">{` ${mouth} `}</Text>
+          <Text color={color} bold>{` ${mouth} `}</Text>
           {v?.listen === 'on' ? <Text color={hears(v) ? '#5fff5f' : '#5f875f'}> {meter(v.levels)} </Text> : null}
           {/* the voices, as narrow as the mic: who spoke in the same 2 s */}
           {v && (v.listen === 'on' || v.spoke.slice(-LEVELS).some(Boolean))
             ? voiceRuns(v.spoke, LEVELS).map(run => <Text color={run.who ? VOICE_COLORS[run.who] : undefined} dimColor={!run.who}>{run.text}</Text>)
             : null}
-          {listenEar ? <Text color={ringColor} dimColor={!ringColor} weight="bold">{` ${listenEar} `}</Text> : null}
-          {blinkCursor ? <Text color={EAR_COLOR} weight="bold">{blinkCursor}</Text> : null}
-          {held ? <Text color={PAUSE_COLOR} weight="bold"> {held}</Text> : null}
+          {listenEar ? <Text color={ringColor} dimColor={!ringColor} bold>{` ${listenEar} `}</Text> : null}
+          {blinkCursor ? <Text color={EAR_COLOR} bold>{blinkCursor}</Text> : null}
+          {held ? <Text color={PAUSE_COLOR} bold> {held}</Text> : null}
           {where ? where.map(p => <Text color={p.on ? LIT : undefined} backgroundColor={p.on && v?.moved && v.pulse ? '#005f00' : undefined} dimColor={!p.on}>{`  ${p.icon} ${p.name}`}</Text>) : null}
           {warning ? <Text color={PAUSE_COLOR}>  {warning}</Text> : null}
         </Box>
         <Box>
           <Text>{'        '}</Text>
-          {answers && ask ? <Text backgroundColor={ask.ground} color={ask.color} weight="bold"> ? </Text> : null}
+          {answers && ask ? <Text backgroundColor={ask.ground} color={ask.color} bold> ? </Text> : null}
           {answers ? <Button hotkey={w.yesKey} dimColor={!v?.pulse} onPress={answer(w.yes)}>{w.yesButton}</Button> : null}
           {answers ? <Button hotkey="n" dimColor={!v?.pulse} onPress={answer(w.no)}>{w.noButton}</Button> : null}
-          {moving ? <Text color={LIT} weight="bold">{moving} </Text> : null}
+          {moving ? <Text color={LIT} bold>{moving} </Text> : null}
           {done ? <Text color={v?.wink ? WINK_COLOR : undefined} dimColor={!v?.wink}>{done} </Text> : null}
           {running && v.listen === 'paused' ? <Button hotkey="p" onPress={pause('resumed', w.resumed)}>{w.resume}</Button> : null}
           {running && v.listen !== 'paused' ? <Button hotkey="p" dimColor onPress={pause('paused', w.paused)}>{w.pause}</Button> : null}
@@ -733,25 +733,25 @@ export const register: Register = (on, options) => {
 
     return (
       <Box flexDirection="column">
-        {roomy ? <Text color={color} weight="bold">{eyes}</Text> : null}
-        {roomy ? <Text color={color} weight="bold">{nose}</Text> : null}
-        {roomy ? <Text color={color} weight="bold">{mouth}</Text> : null}
+        {roomy ? <Text color={color} bold>{eyes}</Text> : null}
+        {roomy ? <Text color={color} bold>{nose}</Text> : null}
+        {roomy ? <Text color={color} bold>{mouth}</Text> : null}
         <Box>
-          <Text weight="bold">Claude</Text>
-          {ask ? <Text backgroundColor={ask.ground} color={ask.color} weight="bold"> ? </Text> : null}
-          {work ? <Text color={SPIN_COLORS[spin % SPIN_COLORS.length]} weight="bold"> {SPIN[spin]}</Text> : null}
-          {gaia ? <Text color={GAIA_COLOR} weight="bold"> {gaia}</Text> : null}
+          <Text bold>Claude</Text>
+          {ask ? <Text backgroundColor={ask.ground} color={ask.color} bold> ? </Text> : null}
+          {work ? <Text color={SPIN_COLORS[spin % SPIN_COLORS.length]} bold> {SPIN[spin]}</Text> : null}
+          {gaia ? <Text color={GAIA_COLOR} bold> {gaia}</Text> : null}
           <Text dimColor> · {parts.length ? parts.join(' · ') : w.rest}</Text>
         </Box>
         {where ? (
           <Box>
-            {ear(v) ? <Text color={earColor(v)} dimColor={!earColor(v)} weight="bold">{` ${ear(v)} `}</Text> : null}
-            {cursor(v) ? <Text color={EAR_COLOR} weight="bold">{cursor(v)}</Text> : null}
-            {held ? <Text color={PAUSE_COLOR} weight="bold">{held}</Text> : null}
+            {ear(v) ? <Text color={earColor(v)} dimColor={!earColor(v)} bold>{` ${ear(v)} `}</Text> : null}
+            {cursor(v) ? <Text color={EAR_COLOR} bold>{cursor(v)}</Text> : null}
+            {held ? <Text color={PAUSE_COLOR} bold>{held}</Text> : null}
             {where.map(p => <Text color={p.on ? LIT : undefined} backgroundColor={p.on && v?.moved && v.pulse ? '#005f00' : undefined} dimColor={!p.on}>{`  ${p.icon} ${p.name}`}</Text>)}
           </Box>
         ) : <Text dimColor>{w.off}</Text>}
-        {moving ? <Text color={LIT} weight="bold">{moving}</Text> : null}
+        {moving ? <Text color={LIT} bold>{moving}</Text> : null}
         {warning ? <Text color={PAUSE_COLOR}>{warning}</Text> : null}
         {v?.listen === 'on' ? <Text color={hears(v) ? '#5fff5f' : '#5f875f'}>{w.mic} {meter(v.levels, width)}</Text> : null}
         {v && (v.listen === 'on' || v.spoke.some(Boolean)) ? (
@@ -760,15 +760,15 @@ export const register: Register = (on, options) => {
             {voiceRuns(v.spoke, width).map(run => <Text color={run.who ? VOICE_COLORS[run.who] : undefined} dimColor={!run.who}>{run.text}</Text>)}
           </Box>
         ) : null}
-        <Text weight="bold">{work ? `${w.running} · ${elapsed(work.turnMs)}` : w.last}{read_ ? <Text dimColor> · {read_}</Text> : null}</Text>
+        <Text bold>{work ? `${w.running} · ${elapsed(work.turnMs)}` : w.last}{read_ ? <Text dimColor> · {read_}</Text> : null}</Text>
         {shownSteps.length ? shownSteps.map(s => <Text dimColor={s.ms !== null}>{stepLine(s, now, spin)}</Text>) : <Text dimColor>{w.noTool}</Text>}
         <Text dimColor>{costLine(u, l)}</Text>
-        <Text weight="bold">{w.heard}</Text>
+        <Text bold>{w.heard}</Text>
         {shownHeard.length
           ? shownHeard.map(said => <Text dimColor={said.what !== 'sent' && said.what !== 'typed'}>{heardLine(said, now, l)}</Text>)
           : <Text dimColor>{w.nothing}</Text>}
         <Box>
-          {answers && ask ? <Text backgroundColor={ask.ground} color={ask.color} weight="bold"> ? </Text> : null}
+          {answers && ask ? <Text backgroundColor={ask.ground} color={ask.color} bold> ? </Text> : null}
           {answers ? <Button hotkey={w.yesKey} dimColor={!v?.pulse} onPress={answer(w.yes)}>{w.yesButton}</Button> : null}
           {answers ? <Button hotkey="n" dimColor={!v?.pulse} onPress={answer(w.no)}>{w.noButton}</Button> : null}
           {running && v.listen === 'paused' ? <Button hotkey="p" onPress={pause('resumed', w.resumed)}>{w.resume}</Button> : null}
@@ -781,3 +781,4 @@ export const register: Register = (on, options) => {
     )
   })
 }
+

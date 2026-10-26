@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/GuitarAlchemist/claude-plugins/plugins/voice/service/voiceapi"
 )
 
 // Server answers the HTTP contract (v0.2) on a loopback address.
@@ -54,13 +56,22 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/say", s.say)
 	mux.HandleFunc("POST /v1/say/stream", s.sayStream)
 	mux.HandleFunc("POST /v1/synthesize", s.synthesize)
-	mux.HandleFunc("POST /v1/stop", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]int{"stopped": s.Speaker.Stop()})
+	mux.HandleFunc("POST /v1/stop", func(w http.ResponseWriter, req *http.Request) {
+		r, err := s.Speaker.StopAndWait(req.Context())
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, r)
+			return
+		}
+		writeJSON(w, http.StatusOK, r)
 	})
 	return localOnly(mux)
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
+	if err := s.Speaker.readinessError(); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": err.Error(), "version": version})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "version": version, "engine": s.Engine,
 		"voice": s.DefaultVoice, "sample_rate": s.SampleRate})
 }
@@ -121,13 +132,18 @@ func (s *Server) say(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "nothing to say once the markup is removed")
 		return
 	}
-	u, err := s.Speaker.Begin(v, rate, len(sentences))
+	u, err := s.Speaker.Begin(v, rate, min(len(sentences), 64))
 	if err != nil {
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 	for _, t := range sentences {
-		u.Add(t)
+		if !u.AddContext(r.Context(), t) {
+			u.Stop()
+			u.End()
+			writeError(w, http.StatusServiceUnavailable, "the utterance stopped before admission completed")
+			return
+		}
 	}
 	u.End()
 	s.answer(w, r, u, len(sentences), req.Wait)
@@ -178,7 +194,7 @@ func (s *Server) sayStream(w http.ResponseWriter, r *http.Request) {
 	runes, sentences, open := 0, 0, true
 	feed := func(parts []string) {
 		for _, t := range parts {
-			if open = u.Add(t); !open {
+			if open = u.AddContext(r.Context(), t); !open {
 				return // stopped by /v1/stop
 			}
 			sentences++
@@ -347,12 +363,5 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 // loopbackOnly refuses a listen address that is not on a loopback interface.
 func loopbackOnly(addr string) error {
-	host, _, err := net.SplitHostPort(addr)
-	if err != nil {
-		return err
-	}
-	if ip := net.ParseIP(host); host == "localhost" || ip != nil && ip.IsLoopback() {
-		return nil
-	}
-	return errors.New("the service listens on loopback only: use 127.0.0.1:<port>")
+	return voiceapi.ValidateLoopback(addr)
 }
