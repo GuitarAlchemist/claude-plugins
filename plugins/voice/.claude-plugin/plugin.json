@@ -1,7 +1,7 @@
 {
   "name": "voice",
   "license": "MIT",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Windows local voice: Piper sentence-streamed speech on loopback, /speak replies and opt-in /listen through whisper.cpp. Acoustic full duplex, echo cancellation and bidirectional WebRTC are not yet verified.",
   "author": { "name": "Stephane Pareilleux" },
   "types": "./types/index.d.ts",

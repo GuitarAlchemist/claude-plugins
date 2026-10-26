@@ -15,12 +15,18 @@ func deltaPeer(t *testing.T, name string, listen func(context.Context) (string, 
 	s := mcp.NewServer(&mcp.Implementation{Name: name, Version: "fixture-v0.6"}, nil)
 	mcp.AddTool(s, &mcp.Tool{Name: "say", Description: "synthetic native admission"}, func(ctx context.Context, _ *mcp.CallToolRequest, a struct {
 		Text string `json:"text"`
-	}) (*mcp.CallToolResult, any, error) { return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "Delta is saying it (say 1): synthetic admission."}}}, nil, nil })
+	}) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "Delta is saying it (say 1): synthetic admission."}}}, nil, nil
+	})
 	mcp.AddTool(s, &mcp.Tool{Name: "listen", Description: "synthetic transcript"}, func(ctx context.Context, _ *mcp.CallToolRequest, a struct {
 		Timeout float64 `json:"timeout_seconds"`
-	}) (*mcp.CallToolResult, any, error) { text, err := listen(ctx); if err != nil {
-		return nil, nil, err
-	}; return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil, nil })
+	}) (*mcp.CallToolResult, any, error) {
+		text, err := listen(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil, nil
+	})
 	st, ct := mcp.NewInMemoryTransports()
 	ss, err := s.Connect(context.Background(), st, nil)
 	if err != nil {

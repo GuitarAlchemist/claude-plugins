@@ -272,9 +272,10 @@ export const register: Register = (on, options) => {
     const { Box, Text } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
-        <Text color={v.state === 'on' ? '#ff5f5f' : '#ffaf00'} weight="bold">{listenBand(v.state, language)}</Text>
+        <Text color={v.state === 'on' ? '#ff5f5f' : '#ffaf00'} bold>{listenBand(v.state, language)}</Text>
         {await next(e).catch(() => null)}
       </Box>
     )
   })
 }
+

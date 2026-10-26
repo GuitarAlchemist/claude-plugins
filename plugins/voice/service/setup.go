@@ -70,7 +70,7 @@ func printSetupPlan(w io.Writer, pins []pin) error {
 		Artifacts      []pin  `json:"artifacts"`
 		Apply          string `json:"apply"`
 		ManifestID     string `json:"manifestId"`
-	}{1, "voice-0.3.0", version, "windows-x64", "Built-in reviewed pins; trust comes from the verified release/source, not SHA alone", total, pins, "No network or writes in plan mode. Explicit --apply is required; release hardening acceptance is pending.", setupManifestID(pins)})
+	}{1, productVersion, version, "windows-x64", "Built-in reviewed pins; trust comes from the verified release/source, not SHA alone", total, pins, "No network or writes in plan mode. Explicit --apply is required; release hardening acceptance is pending.", setupManifestID(pins)})
 }
 
 // install fetches each pin into home unless it is already there with the right hash. It

@@ -22,7 +22,7 @@ func setupManifestID(pins []pin) string {
 	b, _ := json.Marshal(struct {
 		Product, Service, Platform string
 		Pins                       []pin
-	}{"voice-0.3.0", version, "windows-x64", pins})
+	}{productVersion, version, "windows-x64", pins})
 	h := sha256.Sum256(b)
 	return hex.EncodeToString(h[:])
 }

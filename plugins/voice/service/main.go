@@ -28,9 +28,10 @@ import (
 )
 
 const (
-	version     = "0.1.0"
-	defaultAddr = "127.0.0.1:59126"
-	defaultVoc  = "fr_FR-siwis-medium"
+	version        = "0.1.1"
+	productVersion = "voice-0.3.1"
+	defaultAddr    = "127.0.0.1:59126"
+	defaultVoc     = "fr_FR-siwis-medium"
 )
 
 func main() {
