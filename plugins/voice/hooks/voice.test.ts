@@ -102,7 +102,13 @@ function fakes(on: On, env: Record<string, string>, files: Record<string, string
   const filled: string[] = []
   const submitted: string[] = []
   const missing = { deny: 'ENOENT' } as never
-  const k = (path: string) => path.replace(/\\/g, '/') // the engine hands hooks the native path
+  // On a Unix test host the engine resolves simulated drive paths under cwd.
+  // Strip only our two fixture roots, never real arbitrary path components.
+  const k = (path: string) => {
+    const normalized = path.replace(/\\/g, '/')
+    const match = normalized.match(/(?:^|\/)((?:C:\/LA|D:\/scene)\/.*)$/)
+    return match?.[1] ?? normalized
+  }
   on('env.get', async (_, e) => ({ value: env[e.name] }))
   on('fs.exists', async (_, e) => ({ value: k(e.path) in files }))
   on('fs.read', async (_, e) => (k(e.path) in files ? { value: files[k(e.path)]! } : missing))
