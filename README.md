@@ -10,7 +10,7 @@ marketplace that versions them. Why it is laid out this way:
 | --- | --- | --- |
 | `fleet` | `/fleet:ai-scrum`: a round table of every session, subagent, claimed lane and open pull request, with what waits on the user | here |
 | `session-inbox` | an `/inbox` pane for messages from other sessions, and working groups | here |
-| `shared-repo-guard` | holds blanket git commands in shared clones; `/lanes`, and a `/prs` pane | here |
+| `shared-repo-guard` | holds blanket git commands in shared clones; `/lanes`, and a `/prs` pane ([options](#shared-repo-guard-options)) | here |
 | `ga` | Guitar Alchemist DSL tools; works only in a session started inside a ga checkout | [ga](https://github.com/GuitarAlchemist/ga/tree/main/plugins/ga) |
 
 ## Three places a plugin can live
@@ -48,6 +48,34 @@ The plugins here are also linked into `~/.claude/skills/<name>` (directory
 junctions to `plugins/<name>`), so they load as `<name>@skills-dir` and reload
 when a file is saved. Do not also install them from the marketplace on that
 machine: the same plugin would load twice.
+
+## shared-repo-guard options
+
+```
+/plugin install shared-repo-guard --marketplace GuitarAlchemist/claude-plugins
+```
+
+The guard itself needs no setting. `/lanes` and `/prs` read two options, set
+when installing, in `/config`, or with
+`claude plugin configure shared-repo-guard@guitaralchemist`:
+
+| Option | Default | What it is |
+| --- | --- | --- |
+| `repos` | empty: `/prs` lists nothing and says how to set it | the repositories whose open pull requests of yours `/prs` lists, `owner/repo` separated by spaces or commas |
+| `lanesDir` | `lanes` in your Claude Code folder: `$CLAUDE_CONFIG_DIR/lanes`, else `~/.claude/lanes` | the folder where the lanes take `heavy.lock` (`mkdir heavy.lock`, an `owner` file inside), which `/lanes` reports on |
+
+On the author's machine, where the plugin loads as
+`shared-repo-guard@skills-dir`, these values keep what 0.2.1 did:
+
+```bash
+echo '{"repos": "spareilleux/learn GuitarAlchemist/ga GuitarAlchemist/ix GuitarAlchemist/Demerzel", "lanesDir": "<LANES>"}' | claude plugin configure shared-repo-guard@skills-dir --values-stdin
+```
+
+`<LANES>` is the path 0.2.1 wrote as `LANES` in `hooks/register.tsx`, the
+`lanes` folder of the session scratchpad the lanes were set up from;
+`git show ab5d678:plugins/shared-repo-guard/hooks/register.tsx` prints it. The
+values land in `~/.claude/settings.json` under `pluginConfigs`, and apply from
+the next session.
 
 ## Versions
 
