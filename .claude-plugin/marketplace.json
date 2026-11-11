@@ -23,10 +23,24 @@
     },
     {
       "name": "shared-repo-guard",
-      "version": "0.2.1",
+      "version": "0.2.3",
       "description": "Holds blanket git commands in the shared clones for the user's confirmation, with what they would touch; adds /lanes and a /prs pane of open pull requests and their CI",
       "source": "./plugins/shared-repo-guard",
       "category": "productivity"
+    },
+    {
+      "name": "ga-chatbot",
+      "version": "0.2.18",
+      "description": "Guitar Alchemist in panes: the chatbot (local GaChatbot.Api), ASCII chord diagrams from GA's offline voicing index, and the OPTIC-K ladder of any voicing, checked against GA's set theory",
+      "source": "./plugins/ga-chatbot",
+      "category": "development"
+    },
+    {
+      "name": "observatory-guard",
+      "version": "0.2.5",
+      "description": "Keeps the Observatory prototype and its DLSS copy runnable while sessions edit them: Godot --check-only on changed scripts, asks before a command opens a window over the author's demo or stops it or their ComfyUI; adds a /godot pane",
+      "source": "./plugins/observatory-guard",
+      "category": "development"
     },
     {
       "name": "ga",

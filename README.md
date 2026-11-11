@@ -11,6 +11,8 @@ marketplace that versions them. Why it is laid out this way:
 | `fleet` | `/fleet:ai-scrum`: a round table of every session, subagent, claimed lane and open pull request, with what waits on the user | here |
 | `session-inbox` | an `/inbox` pane for messages from other sessions, and working groups | here |
 | `shared-repo-guard` | holds blanket git commands in shared clones; `/lanes`, and a `/prs` pane | here |
+| `ga-chatbot` | a `/ga` pane for the local GA chatbot, ASCII chord diagrams from GA's voicing index, and the OPTIC-K ladder of a voicing | here |
+| `observatory-guard` | checks the Observatory's Godot scripts as sessions edit them, and asks before a command disturbs the author's demo or ComfyUI; a `/godot` pane | here |
 | `ga` | Guitar Alchemist DSL tools; works only in a session started inside a ga checkout | [ga](https://github.com/GuitarAlchemist/ga/tree/main/plugins/ga) |
 
 ## Three places a plugin can live
