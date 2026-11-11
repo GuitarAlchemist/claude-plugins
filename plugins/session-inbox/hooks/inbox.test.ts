@@ -311,7 +311,7 @@ const pane = (surfaceId: string, state: string, sessionId: string) => ({
 })
 
 // A wmux that answers from `panes` and `screens`, and records every command it was given.
-function fakeWmux(on: On, panes: ReturnType<typeof pane>[], screens: Record<string, string>, failing = '', envs: (Record<string, string> | undefined)[] = []): string[][] {
+function fakeWmux(on: On, panes: ReturnType<typeof pane>[], screens: Record<string, string>, failing = '', envs: (Record<string, string> | undefined)[] = [], snapshots: ReturnType<typeof pane>[][] = []): string[][] {
   const calls: string[][] = []
   on('process.run', (_$, e) => {
     const raw: unknown = e
@@ -323,7 +323,8 @@ function fakeWmux(on: On, panes: ReturnType<typeof pane>[], screens: Record<stri
     const done = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '' } })
     if (failing && args[0] === failing) return { value: { exitCode: 1, stdout: '', stderr: 'pipe closed' } }
     if (args[0] === 'agent-state') {
-      return done(args.includes('--surface') ? JSON.stringify({ state: panes.find(p => p.surfaceId === surface) }) : JSON.stringify({ states: panes }))
+      const current = snapshots.shift() ?? panes
+      return done(args.includes('--surface') ? JSON.stringify({ state: current.find(p => p.surfaceId === surface) }) : JSON.stringify({ states: current }))
     }
     if (args[0] === 'read-screen') return done(JSON.stringify({ text: screens[surface] ?? '' }))
     return done('{"ok":true}')
@@ -333,6 +334,21 @@ function fakeWmux(on: On, panes: ReturnType<typeof pane>[], screens: Record<stri
 
 const PANES = [pane('surf-me', 'working', 's0'), pane('surf-a', 'idle', 's1'), pane('surf-b', 'idle', 's2'), pane('surf-c', 'working', 's3')]
 const LINE = '[group fleet] main is red (posted by the user from this session with /inbox send, typed here by wmux)'
+
+for (const change of ['reassigned', 'shared-session', 'shared-surface', 'missing-session', 'after-screen']) {
+  test(`wmux leaves a pane untouched when identity becomes ${change}`, async ($, on) => {
+    engine(on, FLEET, '', '', IN_WMUX)
+    const initial = [pane('surf-me', 'working', 's0'), pane('surf-a', 'idle', 's1')]
+    const changed = change === 'shared-session' ? [...initial, pane('surf-other', 'idle', 's1')]
+      : change === 'shared-surface' ? [...initial, pane('surf-a', 'idle', 's2')]
+      : [initial[0]!, pane('surf-a', 'idle', change === 'missing-session' ? '' : 'replacement')]
+    const snapshots = change === 'after-screen' ? [initial, initial, changed] : [initial, changed]
+    const calls = fakeWmux(on, changed, { 'surf-a': EMPTY_BOX }, '', [], snapshots)
+    const result = await $.command.run(inbox('send fleet identity-bound-post'))
+    expect(calls.filter(c => c[0] === 'send' || c[0] === 'send-key')).toEqual([])
+    expect(result.text).toContain('no pane')
+  })
+}
 
 test('with no live peer, /inbox send to a group of everyone is typed by wmux into each idle pane with an empty editor, once', async ($, on) => {
   const world = engine(on, FLEET, '', '', IN_WMUX)

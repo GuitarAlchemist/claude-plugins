@@ -319,10 +319,12 @@ export function parsePanes(json: string): Pane[] {
 // also reports: which of them holds the session is unknown, so neither is typed into.
 export function panesToType(panes: readonly Pane[], self: string): { chosen: string[]; busy: number; shared: number } {
   const others = panes.filter(p => p.surface !== self)
-  const isShared = (p: Pane) => p.session !== '' && panes.filter(q => q.session === p.session).length > 1
+  const isShared = (p: Pane) => panes.filter(q => q.surface === p.surface).length > 1 ||
+    (p.session !== '' && panes.filter(q => q.session === p.session).length > 1)
+  const eligible = (p: Pane) => p.isIdle && p.session !== '' && p.surface !== ''
   return {
-    chosen: others.filter(p => p.isIdle && !isShared(p)).map(p => p.surface),
-    busy: others.filter(p => !p.isIdle && !isShared(p)).length,
+    chosen: others.filter(p => eligible(p) && !isShared(p)).map(p => p.surface),
+    busy: others.filter(p => !eligible(p) && !isShared(p)).length,
     shared: others.filter(isShared).length,
   }
 }
@@ -362,7 +364,7 @@ export function typedReport(id: string, r: { typed: number; busy: number; shared
   const s = (n: number) => `${n} pane${n === 1 ? '' : 's'}`
   const parts = [r.typed ? `Typed by wmux into ${s(r.typed)} of ${id}.` : `wmux typed ${id}'s post into no pane.`]
   if (r.busy) parts.push(`${s(r.busy)} left alone (busy, or a draft in the editor): post again later for those.`)
-  if (r.shared) parts.push(`${s(r.shared)} left alone (two panes report one session id).`)
+  if (r.shared) parts.push(`${s(r.shared)} left alone (ambiguous surface or session identity).`)
   if (r.unknown) parts.push(`${s(r.unknown)}: wmux did not confirm, and nothing is typed twice.`)
   return parts.join(' ')
 }

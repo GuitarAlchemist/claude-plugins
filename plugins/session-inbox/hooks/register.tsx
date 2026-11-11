@@ -245,8 +245,10 @@ async function wmux($: EngineInterface): Promise<Wmux | undefined> {
 // read again right before it is typed into; one that wmux did not confirm is never typed into twice.
 async function typeIntoPanes($: EngineInterface, w: Wmux, group: string, body: string, self: string): Promise<Post> {
   let plan
+  let original
   try {
-    plan = panesToType(parsePanes(await w.run(['agent-state'])), w.self)
+    original = parsePanes(await w.run(['agent-state']))
+    plan = panesToType(original, w.self)
   } catch (err) {
     return { ok: false, text: `wmux did not list its panes (${why(err)}): nothing was typed.`, handOver: '' }
   }
@@ -254,9 +256,18 @@ async function typeIntoPanes($: EngineInterface, w: Wmux, group: string, body: s
   const count = { typed: 0, busy: plan.busy, shared: plan.shared, unknown: 0 }
   for (const surface of plan.chosen) {
     try {
-      const [now] = parsePanes(await w.run(['agent-state', '--surface', surface]))
+      const expectedSession = original.find(p => p.surface === surface)?.session
+      const stillEligible = async () => {
+        const current = parsePanes(await w.run(['agent-state']))
+        return panesToType(current, w.self).chosen.includes(surface) &&
+          current.find(p => p.surface === surface)?.session === expectedSession
+      }
+      if (!await stillEligible()) {
+        count.busy += 1
+        continue
+      }
       const screen = screenText(await w.run(['read-screen', '--surface', surface, '--lines', '16']))
-      if (!now?.isIdle || !editorIsEmpty(screen)) {
+      if (!editorIsEmpty(screen) || !await stillEligible()) {
         count.busy += 1
         continue
       }
@@ -265,6 +276,8 @@ async function typeIntoPanes($: EngineInterface, w: Wmux, group: string, body: s
       continue
     }
     try {
+      // WMUX does not expose an atomic identity/editor compare-and-send. These
+      // checks reject observed churn, but cannot close the final read/write race.
       await w.run(['send', '--surface', surface, line])
       await w.run(['send-key', 'enter', '--surface', surface])
       count.typed += 1
