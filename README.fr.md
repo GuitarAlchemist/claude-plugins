@@ -10,7 +10,7 @@ marketplace qui les versionne. Pourquoi cette organisation :
 | --- | --- | --- |
 | `fleet` | `/fleet:ai-scrum` : un tour de table de chaque session, sous-agent, lane réclamée et pull request ouverte, avec ce qui attend l'utilisateur | ici |
 | `session-inbox` | un panneau `/inbox` pour les messages des autres sessions, et des groupes de travail | ici |
-| `shared-repo-guard` | retient les commandes git globales dans les clones partagés ; `/lanes`, et un panneau `/prs` | ici |
+| `shared-repo-guard` | retient les commandes git globales dans les clones partagés ; `/lanes`, et un panneau `/prs` ([options](#options-de-shared-repo-guard)) | ici |
 | `ix` | le serveur MCP d'IX (`ix-mcp`) pour Claude Code et Codex : ses outils de ML, de maths, de graphes et de gouvernance ([README](plugins/ix/README.fr.md)) | ici |
 | `ga` | les outils du DSL Guitar Alchemist ; ne fonctionne que dans une session démarrée dans un checkout de ga | [ga](https://github.com/GuitarAlchemist/ga/tree/main/plugins/ga) |
 
@@ -60,6 +60,35 @@ et se rechargent quand un fichier est enregistré. Ne pas les installer aussi
 depuis la marketplace sur cette machine : le même plugin se chargerait deux
 fois.
 
+## Options de shared-repo-guard
+
+```
+/plugin install shared-repo-guard --marketplace GuitarAlchemist/claude-plugins
+```
+
+La garde elle-même ne demande aucun réglage. `/lanes` et `/prs` lisent deux
+options, réglées à l'installation, dans `/config`, ou avec
+`claude plugin configure shared-repo-guard@guitaralchemist` :
+
+| Option | Par défaut | Ce que c'est |
+| --- | --- | --- |
+| `repos` | vide : `/prs` ne liste rien et dit comment la régler | les dépôts dont `/prs` liste vos pull requests ouvertes, en `owner/repo` séparés par des espaces ou des virgules |
+| `lanesDir` | `lanes` dans votre dossier Claude Code : `$CLAUDE_CONFIG_DIR/lanes`, sinon `~/.claude/lanes` | le dossier où les lanes prennent `heavy.lock` (`mkdir heavy.lock`, un fichier `owner` dedans), dont `/lanes` rend compte |
+
+Sur la machine de l'auteur, où le plugin se charge comme
+`shared-repo-guard@skills-dir`, ces valeurs gardent ce que faisait la 0.2.1 :
+
+```bash
+echo '{"repos": "spareilleux/learn GuitarAlchemist/ga GuitarAlchemist/ix GuitarAlchemist/Demerzel", "lanesDir": "<LANES>"}' | claude plugin configure shared-repo-guard@skills-dir --values-stdin
+```
+
+`<LANES>` est le chemin que la 0.2.1 écrivait comme `LANES` dans
+`hooks/register.tsx`, le dossier `lanes` du scratchpad de la session où les
+lanes ont été mises en place ;
+`git show ab5d678:plugins/shared-repo-guard/hooks/register.tsx` l'affiche. Les
+valeurs vont dans `~/.claude/settings.json` sous `pluginConfigs`, et
+s'appliquent à partir de la session suivante.
+
 ## Versions
 
 La version de chaque plugin est écrite deux fois, dans son
@@ -93,3 +122,9 @@ préfixe du nom de leur plugin.
 
 Ce qu'il ne voit pas : une commande traitée par un hook sans matcher, et les
 commandes d'un plugin référencé depuis un autre repo.
+
+## Licence
+
+MIT, voir [LICENSE](LICENSE). Un plugin référencé depuis un autre repo, comme
+`ga`, relève de la licence de ce repo. Les modèles téléchargés gardent leurs
+propres licences, comme les voix Piper qu'installe `voice`.
