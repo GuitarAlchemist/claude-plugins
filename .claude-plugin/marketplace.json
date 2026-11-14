@@ -29,6 +29,13 @@
       "category": "productivity"
     },
     {
+      "name": "ix",
+      "version": "0.1.0",
+      "description": "IX's MCP server, for Claude Code and Codex: its ML, math, graph, search and Demerzel governance tools. Needs Node.js and an ix-mcp binary, found from an option, IX_MCP_BIN or PATH",
+      "source": "./plugins/ix",
+      "category": "development"
+    },
+    {
       "name": "voice",
       "version": "0.3.0",
       "description": "Full-duplex local voice: Claude speaks through piper-voice, a local streaming text-to-speech service on Piper (127.0.0.1 only), says its replies with /speak on, and hears you with /listen, transcribed on this machine by whisper.cpp (listening is Windows only and off until /listen)",
