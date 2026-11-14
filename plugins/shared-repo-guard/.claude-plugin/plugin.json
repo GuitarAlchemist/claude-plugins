@@ -1,7 +1,21 @@
 {
   "name": "shared-repo-guard",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "author": { "name": "Stephane Pareilleux" },
-  "description": "Holds blanket git commands in the shared clones for the user's confirmation, with what they would touch; adds /lanes and a /prs pane of open pull requests and their CI.",
-  "types": "./types/index.d.ts"
+  "description": "Holds blanket git commands in the shared clones for the user's confirmation, with what they would touch; adds /lanes and a /prs pane of open pull requests in the repositories you list, and their CI.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "repos": {
+      "type": "string",
+      "title": "Repositories for /prs",
+      "description": "The GitHub repositories whose open pull requests of yours the /prs pane lists, as owner/repo names separated by spaces or commas. Empty: /prs lists nothing and says how to set it.",
+      "default": ""
+    },
+    "lanesDir": {
+      "type": "string",
+      "title": "Lanes folder",
+      "description": "The folder where the lanes take their heavy.lock, which /lanes reports on. Empty: lanes in your Claude Code folder (CLAUDE_CONFIG_DIR, else ~/.claude/lanes).",
+      "default": ""
+    }
+  }
 }

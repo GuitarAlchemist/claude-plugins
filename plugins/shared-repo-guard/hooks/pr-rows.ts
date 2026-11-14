@@ -2,7 +2,14 @@ import type { SharedRepoGuardPr, SharedRepoGuardPrCi } from '../types'
 
 // What `gh pr list --json` answers, turned into the rows the /prs pane draws. Pure: no `$` here.
 
-export const REPOS = ['spareilleux/learn', 'GuitarAlchemist/ga', 'GuitarAlchemist/ix', 'GuitarAlchemist/Demerzel']
+// The `repos` option: `owner/repo` names separated by spaces or commas, each read once.
+export function parseRepos(option: unknown): string[] {
+  return [...new Set(String(option ?? '').split(/[\s,]+/).filter(Boolean))]
+}
+
+export const NO_REPOS =
+  'No repositories to list: set the `repos` option to owner/repo names separated by spaces or commas, in /config or with `claude plugin configure shared-repo-guard@guitaralchemist`.'
+
 export const FIELDS = 'number,title,headRefName,headRefOid,isDraft,mergeable,reviewDecision,statusCheckRollup,url,updatedAt'
 
 type GhCheck = { name?: string; context?: string; conclusion?: string; state?: string; status?: string }
