@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>piper-voice duplex</title>
+<style>
+  :root { color-scheme: light dark; font: 15px/1.4 system-ui, sans-serif; }
+  body { max-width: 52rem; margin: 1.5rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; margin: 0 0 .5rem; }
+  #status { margin: .5rem 0 1rem; opacity: .8; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 4rem; font: inherit; }
+  button { font: inherit; padding: .3rem .9rem; margin: .3rem .3rem 0 0; }
+  #transcript li { margin: .2rem 0; }
+  #log { font: 12px/1.3 ui-monospace, monospace; white-space: pre-wrap; max-height: 16rem; overflow: auto;
+         border: 1px solid #8884; padding: .5rem; margin-top: 1rem; }
+  .meter { display: inline-block; width: 8rem; height: .6rem; border: 1px solid #8886; vertical-align: middle; }
+  .meter i { display: block; height: 100%; background: #4a8; width: 0; }
+</style>
+</head>
+<body>
+<h1>piper-voice: full-duplex session over WebRTC</h1>
+<div id="status">Not connected. <button id="connect">Connect</button>
+  mic <span class="meter"><i id="level"></i></span></div>
+<textarea id="text" placeholder="Text to speak">Bonjour. Ceci est une session en duplex intégral : je parle pendant que tu parles.</textarea>
+<div>
+  <button id="say" disabled>Say</button>
+  <button id="stop" disabled>Stop</button>
+  <button id="flush" disabled>Flush speech</button>
+</div>
+<h2 style="font-size:1rem">Heard</h2>
+<ul id="transcript"></ul>
+<div id="log"></div>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const log = (...a) => { $('log').textContent += a.join(' ') + '\n'; $('log').scrollTop = 1e9; };
+  let pc, dc, ctx, playAt = 0, sources = [], ttsRate = 22050;
+
+  async function connect() {
+    $('connect').disabled = true;
+    ctx = new AudioContext({ sampleRate: 16000 });
+    await ctx.resume();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+    pc = new RTCPeerConnection({});
+    pc.onconnectionstatechange = () => { $('status').firstChild.textContent = 'Peer ' + pc.connectionState + '. '; log('peer', pc.connectionState); };
+    dc = pc.createDataChannel('voice', { ordered: true });
+    dc.binaryType = 'arraybuffer';
+    dc.onopen = () => {
+      log('channel open; mic at', ctx.sampleRate, 'Hz');
+      dc.send(JSON.stringify({ type: 'hello', sample_rate: ctx.sampleRate }));
+      startMic(stream);
+      for (const b of ['say', 'stop', 'flush']) $(b).disabled = false;
+      if (auto) setTimeout(() => $('say').click(), 1000); // ?auto: speak while listening, unattended
+    };
+    dc.onclose = () => { log('channel closed'); for (const b of ['say', 'stop', 'flush']) $(b).disabled = true; $('connect').disabled = false; };
+    dc.onmessage = e => typeof e.data === 'string' ? onEvent(JSON.parse(e.data)) : play(e.data);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await new Promise(res => pc.iceGatheringState === 'complete' ? res()
+      : pc.addEventListener('icegatheringstatechange', () => pc.iceGatheringState === 'complete' && res()));
+    const r = await fetch('/v1/rtc/offer', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp }) });
+    const a = await r.json();
+    if (!r.ok) throw new Error(a.error);
+    await pc.setRemoteDescription({ type: 'answer', sdp: a.sdp });
+  }
+
+  function startMic(stream) {
+    const src = ctx.createMediaStreamSource(stream);
+    const proc = ctx.createScriptProcessor(1024, 1, 1);
+    proc.onaudioprocess = e => {
+      const f = e.inputBuffer.getChannelData(0), i16 = new Int16Array(f.length);
+      let peak = 0;
+      for (let i = 0; i < f.length; i++) { const v = Math.max(-1, Math.min(1, f[i])); i16[i] = v * 32767; peak = Math.max(peak, Math.abs(v)); }
+      $('level').style.width = Math.round(peak * 100) + '%';
+      if (dc.readyState === 'open') dc.send(i16.buffer);
+    };
+    src.connect(proc);
+    proc.connect(ctx.destination);
+  }
+
+  function play(buf) {
+    const i16 = new Int16Array(buf), ab = ctx.createBuffer(1, i16.length, ttsRate), ch = ab.getChannelData(0);
+    for (let i = 0; i < i16.length; i++) ch[i] = i16[i] / 32768;
+    const s = ctx.createBufferSource();
+    s.buffer = ab; s.connect(ctx.destination);
+    const t = Math.max(ctx.currentTime + 0.05, playAt);
+    s.start(t); playAt = t + ab.duration; sources.push(s);
+    s.onended = () => { sources = sources.filter(x => x !== s); };
+  }
+
+  function onEvent(ev) {
+    switch (ev.type) {
+      case 'ready': log('ready: voice', ev.voice, 'at', ev.sample_rate, 'Hz; transcriber:', ev.transcriber || 'none'); ttsRate = ev.sample_rate; break;
+      case 'sentence': ttsRate = ev.sample_rate; log(ev.id, 'sentence', ev.n, ev.ms + ' ms'); break;
+      case 'said': log(ev.id, 'said', ev.sentences, 'sentence(s)', ev.stopped ? '(stopped)' : ''); break;
+      case 'speech': log('speech', ev.state, ev.ms ? ev.ms + ' ms' : ''); break;
+      case 'transcript': { const li = document.createElement('li'); li.textContent = ev.text + '  (' + ev.ms + ' ms, in ' + ev.took_ms + ' ms)'; $('transcript').appendChild(li); log('transcript:', ev.text); break; }
+      case 'error': log('error:', ev.error); break;
+      default: log('event', JSON.stringify(ev));
+    }
+  }
+
+  $('connect').onclick = () => connect().catch(e => { log('connect failed:', e.message); $('connect').disabled = false; });
+  $('say').onclick = () => dc.send(JSON.stringify({ type: 'say', text: $('text').value }));
+  $('stop').onclick = () => { dc.send(JSON.stringify({ type: 'stop' })); for (const s of sources) s.stop(); sources = []; playAt = 0; };
+  $('flush').onclick = () => dc.send(JSON.stringify({ type: 'flush' }));
+  const auto = new URLSearchParams(location.search).has('auto');
+  if (auto) $('connect').click();
+})();
+</script>
+</body>
+</html>

@@ -114,6 +114,10 @@ func serveCmd(args []string) (err error) {
 	voice := fs.String("voice", envOr("PIPER_VOICE_VOICE", defaultVoc), "default voice")
 	fxName := fs.String("fx", envOr("PIPER_VOICE_FX", "none"), "effect on played speech: none or warm")
 	logFile := fs.String("log", "", "append the log to this file instead of stderr (the windowless build has no console)")
+	whisper := fs.String("whisper", envOr("PIPER_VOICE_WHISPER", ""), "whisper-cli executable that transcribes WebRTC sessions (default: the voice-listen install under the cache folder; \"off\" serves speech only)")
+	whisperModel := fs.String("whisper-model", envOr("PIPER_VOICE_WHISPER_MODEL", ""), "whisper ggml model file (default: the voice-listen install's)")
+	whisperLang := fs.String("whisper-lang", envOr("PIPER_VOICE_WHISPER_LANG", ""), "language spoken to the microphone (default: the default voice's)")
+	whisperThreads := fs.Int("whisper-threads", 0, "threads whisper runs on (default: half the CPUs, at most 8)")
 	_ = fs.Parse(args)
 	var logOut io.Writer = os.Stderr
 	if *logFile != "" {
@@ -171,13 +175,30 @@ func serveCmd(args []string) (err error) {
 		return startPiper(exe, nil, v, lengthScale, tmp, logger)
 	})
 	defer pool.Close()
+	rtc := &RTC{Engines: pool.Get, Voices: voices, DefaultVoice: def.ID, SampleRate: def.SampleRate, MaxText: 20000, Log: logger}
+	defer rtc.Close()
+	if *whisper != "off" {
+		lang := *whisperLang
+		if lang == "" {
+			lang, _, _ = strings.Cut(def.Language, "_")
+		}
+		cache, _ := os.UserCacheDir()
+		exe, model, err := findWhisper(cache, *whisper, *whisperModel, lang)
+		if err != nil {
+			logger.Printf("no transcription for WebRTC sessions: %v (see --whisper)", err)
+		} else if rtc.Transcriber, err = newWhisper(exe, model, lang, tmp, *whisperThreads); err != nil {
+			return err
+		} else {
+			logger.Printf("whisper: %s with %s, language %s", exe, filepath.Base(model), lang)
+		}
+	}
 	srv := &Server{Speaker: NewSpeaker(pool.Get, player, fx, logger), Engines: pool.Get, Voices: voices, DefaultVoice: def.ID,
-		Engine: "piper-cli", SampleRate: player.SampleRate(), MaxText: 20000}
+		Engine: "piper-cli", SampleRate: player.SampleRate(), MaxText: 20000, RTC: rtc}
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
 		return err
 	}
-	logger.Printf("piper-voice %s on http://%s, default voice %s, effect %s, voices: %s", version, ln.Addr(), def.ID, *fxName, voiceIDs(voices))
+	logger.Printf("piper-voice %s on http://%s, default voice %s, effect %s, voices: %s; WebRTC page at http://%s/rtc", version, ln.Addr(), def.ID, *fxName, voiceIDs(voices), ln.Addr())
 	go func() {
 		if _, err := pool.Get(def, 1); err != nil {
 			logger.Printf("warming %s: %v", def.ID, err)

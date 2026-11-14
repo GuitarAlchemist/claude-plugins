@@ -18,6 +18,14 @@ refuses requests from web pages.
 - Everything you say aloud also goes in your text answer. The voice is a second
   channel, never the only one.
 
+## Replies and listening
+
+- `/speak on` (the user's command) makes this session's replies be said aloud
+  without any tool call: their first prose paragraph. Then do not also call
+  `say` with the same text. `/speak off` ends it.
+- `/listen` opens the microphone, transcribed locally by whisper.cpp (Windows
+  only). It is the user's to start: never run it, start the listener script, or
+  ask a tool to, on your own. Sentences heard arrive as the user's prompts.
 ## Tools first
 
 This plugin's MCP server gives you four tools: `say` (`text`, and optionally

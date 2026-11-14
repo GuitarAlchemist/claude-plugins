@@ -12,7 +12,8 @@ marketplace that versions them. Why it is laid out this way:
 | `session-inbox` | an `/inbox` pane for messages from other sessions, and working groups | here |
 | `shared-repo-guard` | holds blanket git commands in shared clones; `/lanes`, and a `/prs` pane ([options](#shared-repo-guard-options)) | here |
 | `ix` | IX's MCP server (`ix-mcp`) for Claude Code and Codex: its ML, math, graph and governance tools ([README](plugins/ix/README.md)) | here |
-| `voice` | `/voice`: Claude speaks aloud through piper-voice, a local streaming text-to-speech service on Piper (Go, loopback only) | here |
+| `voice` | full-duplex local voice: `/voice` and `/speak` make Claude speak through piper-voice, a local streaming text-to-speech service on Piper (Go, loopback only); `/listen` hears you, transcribed on the machine by whisper.cpp (Windows, off until asked) | here |
+| `voice-avatar` | an avatar band above the prompt and a pane for `voice`: who speaks, whether Claude listens and to whom, the mic level, what Claude does | here |
 | `ga` | Guitar Alchemist DSL tools; works only in a session started inside a ga checkout | [ga](https://github.com/GuitarAlchemist/ga/tree/main/plugins/ga) |
 
 ## Three places a plugin can live
