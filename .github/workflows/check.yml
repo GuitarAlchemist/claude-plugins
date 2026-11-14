@@ -30,3 +30,20 @@ jobs:
         env:
           BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
         run: python3 scripts/check.py ${BASE:+--base "$BASE"}
+
+  voice-service:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/voice/service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: plugins/voice/service/go.mod
+          cache-dependency-path: plugins/voice/service/go.sum
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+      # No Piper and no sound card here: the tests use a fake piper and a fake player.
+      - run: go test -race ./...
+      - run: go test -tags nooto ./...
