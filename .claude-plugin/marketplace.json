@@ -29,6 +29,13 @@
       "category": "productivity"
     },
     {
+      "name": "ix",
+      "version": "0.1.0",
+      "description": "IX's MCP server, for Claude Code and Codex: its ML, math, graph, search and Demerzel governance tools. Needs Node.js and an ix-mcp binary, found from an option, IX_MCP_BIN or PATH",
+      "source": "./plugins/ix",
+      "category": "development"
+    },
+    {
       "name": "ga",
       "version": "1.0.0",
       "description": "Guitar Alchemist DSL: music theory tools, chord analysis, tab search and GA Language commands. It runs GaMcpServer from the current directory, so it works only in a session started inside a ga checkout",
